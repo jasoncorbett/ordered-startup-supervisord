@@ -15,7 +15,7 @@ setup(
         "Topic :: System :: Boot :: Init",
         "Environment :: Plugins"
     ],
-    long_description=open('README.txt').read(),
+    long_description=open('README.rst').read(),
     py_modules=['ordered_startup_supervisord'],
     #packages=find_packages(exclude=['distribute_setup']),
     #package_data={'': ['*.txt', '*.rst', '*.html']},
@@ -25,7 +25,7 @@ setup(
     url="http://github.com/jasoncorbett/ordered-startup-supervisord",
     entry_points={
         "console_scripts": [
-            "ordered_startup_supervisord:main"
+            "ordered-startup-listener=ordered_startup_supervisord:main"
         ]
     }
 )
