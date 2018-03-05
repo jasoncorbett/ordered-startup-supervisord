@@ -81,13 +81,13 @@ Multiple dependencies are separated by a white space. To have a service named
 
 #### `dependent_startup_inherit_priority`
 
-Specify if the service should inherit it's priority from the services it depends
+Specify if the service should inherit its priority from the services it depends
 on.
 
 | Type | **bool**
 :--- | :---
 | **Required**| **no**
-| **Example** | To have a service named *child* depend on a service *parent*: ``dependent_startup_inherit_priority=true``
+| **Example** | ``dependent_startup_inherit_priority=true``
 
 
 ## Building and testing
