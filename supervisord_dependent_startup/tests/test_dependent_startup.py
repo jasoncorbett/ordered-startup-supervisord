@@ -1,12 +1,14 @@
 from __future__ import print_function
 
-import collections
 import logging
 import os
 
-from . import Service, ServiceOptions, ServicesHandler, common, get_all_configs
+from parameterized import param, parameterized
+
+from . import DependentStartupError, ServiceOptions, common, config_utils, get_all_configs
 from .common import mock
-from .utils import cprint, plugin_tests_logger_name  # noqa: F401
+from .helpers import LogCapturePrintable
+from .utils import cprint, plugin_logger_name, plugin_tests_logger_name  # noqa: F401
 
 logger = logging.getLogger(plugin_tests_logger_name)
 
@@ -20,28 +22,25 @@ class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTest
 
     def test_get_all_configs(self):
         self.write_supervisord_config()
-        service_conf = self.add_service_file("testservice", "/bin/sleep")
+        service_conf = self.add_service_file("testservice")
         configs = get_all_configs(self.supervisor_conf)
         expected = [self.supervisor_conf, service_conf]
         self.assertEqual(expected, configs)
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_run_mock(self, mock_get_rpc_interface):
+    def test_run_plugin(self):
         self.write_supervisord_config()
-
         self.add_test_service('consul', self.options)
         self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running", priority=10)
         self.add_test_service('slurmd2', self.options, dependent_startup_wait_for="consul:running slurmd:running")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
         # self.print_procs()
         procs = ['consul', 'slurmd', 'slurmd2']
         self.assertEqual(self.processes_started, procs)
         self.assertStateProcsRunning(procs)
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_run_ping_example(self, mock_get_rpc_interface):
+    def test_run_ping_example(self):
         self.write_supervisord_config()
 
         self.add_test_service('ping', self.options, cmd="/bin/ping -c 1 www.google.com", startsecs=0)
@@ -52,11 +51,10 @@ class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTest
         self.add_test_service('ping3', self.options, cmd="/bin/ping -c 1 www.google.com", startsecs=0,
                               dependent_startup_wait_for="ping2:exited")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_run_ping_example_running(self, mock_get_rpc_interface):
+    def test_run_ping_example_running(self):
         self.write_supervisord_config()
 
         self.add_test_service('ping', self.options, cmd="/bin/ping -i 1 -c 2 www.google.com", startsecs=0)
@@ -67,11 +65,10 @@ class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTest
         self.add_test_service('ping3', self.options, cmd="/bin/ping -i 1 -c 2 www.google.com", startsecs=0,
                               dependent_startup_wait_for="ping2:running")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_run_ping_example_immedate_exit(self, mock_get_rpc_interface):
+    def test_run_ping_example_immedate_exit(self):
         self.write_supervisord_config()
 
         self.add_test_service('ping', self.options, cmd="/bin/ping -c 1 www.google.com", startsecs=0)
@@ -82,238 +79,219 @@ class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTest
         self.add_test_service('ping3', self.options, cmd="/bin/ping -c 1 www.google.com", startsecs=0,
                               dependent_startup_wait_for="ping2:running")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
 
 
-class SortOrderTestsBase(common.DependentStartupTestsBase):
-
-    def setUp(self):
-        super(SortOrderTestsBase, self).setUp()
-        self.handler = ServicesHandler(None)
-        self.services = self.handler._services
-
-    def get_sorted_services(self):
-        return self.handler.get_sorted_services_list()
-
-    def setup_services(self, services):
-        if type(services) == str:
-            services = [services]
-
-        for name in services:
-            p = Service(None, self.handler)
-            p.name = name
-            p.options = ServiceOptions()
-            p.options.opts['dependent_startup'] = True
-            p.options.opts['autostart'] = False
-            self.services[name] = p
-
-    def set_service_opts(self, name, depends=None, priority=None, inherit_priority=None):
-        options = self.services[name].options
-        if depends:
-            for k in depends:
-                options.wait_for[k] = depends[k]
-
-        if priority is not None:
-            options.opts['priority'] = priority
-
-        if inherit_priority is not None:
-            options.opts[ServiceOptions.inherit_priority_opts_string] = inherit_priority
+def unit_test_name_func(testcase_func, param_num, param):
+    field_conf = param.kwargs['field_conf']
+    name = "{name}_field_{field}_env_{env_var}_{env_value}".format(name=testcase_func.__name__, **field_conf)
+    name = parameterized.to_safe_name(name)
+    return name
 
 
-Priorites = collections.namedtuple('Priorites', 'priority effective sort')
+expansion_success_config_option_fields = [
+    param(field_conf={'field': 'priority', 'env_var': 'PRIORITY', 'env_value': 1}),
+    param(field_conf={'field': 'autostart', 'env_var': 'AUTOSTART', 'env_value': 'false'}),
+    param(field_conf={'field': 'autostart', 'env_var': 'AUTOSTART', 'env_value': 'true'}),
+    param(field_conf={'field': 'dependent_startup', 'env_var': 'DEPENDENT_STARTUP', 'env_value': 'true'}),
+    param(field_conf={'field': 'dependent_startup', 'env_var': 'DEPENDENT_STARTUP', 'env_value': 'false'}),
+    param(field_conf={'field': 'dependent_startup_inherit_priority',
+                      'env_var': 'DEPENDENT_STARTUP_INHERIT_PRIORITY', 'env_value': 'false'}),
+    param(field_conf={'field': 'dependent_startup_inherit_priority',
+                      'env_var': 'DEPENDENT_STARTUP_INHERIT_PRIORITY', 'env_value': 'true'})]
 
 
-def get_priority(priority=None, effective=None, sort=Service.default_priority_sort):
-    return Priorites(priority=priority, effective=effective, sort=sort)
+class ConfigEnvVariablesExpansionSuccessTests(common.DependentStartupWithoutEventListenerTestsBase):
+
+    def fix_incompatibility(self, service_args):
+        if 'autostart' in service_args:
+            value = config_utils.expand_string('autostart', service_args.get('autostart'))
+            if config_utils.safe_boolean(value) is True:
+                service_args['dependent_startup'] = 'false'
+        else:
+            service_args['autostart'] = 'false'
+
+            if 'dependent_startup' in service_args:
+                if config_utils.safe_boolean(service_args['dependent_startup']) is True:
+                    service_args['autostart'] = 'false'
+            else:
+                service_args['dependent_startup'] = 'true'
+
+    @parameterized.expand(expansion_success_config_option_fields, testcase_func_name=unit_test_name_func)
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_with_env_var_expansion(self, field_conf):
+        field = field_conf['field']
+        env_var = field_conf['env_var']
+        env_value = field_conf['env_value']
+
+        self.write_supervisord_config()
+        env_var_expansion = "ENV_%s" % env_var
+        field_value = "%({})s".format(env_var_expansion)
+        os.environ[env_var] = str(env_value)
+        service_args = {field: field_value}
+
+        self.fix_incompatibility(service_args)
+        self.add_service_file("service_with_env_var", **service_args)
+
+        expected_log_msg = ("Parsing config with the following expansions: {'%s': '%s'}" %
+                            (env_var_expansion, env_value))
+
+        with LogCapturePrintable() as log_capture:
+            self.setup_eventlistener()
+            self.assertLogContains(
+                log_capture,
+                (plugin_logger_name, 'DEBUG', expected_log_msg))
+
+        service = self.monitor.services_handler._services['service_with_env_var']
+
+        # When parsing fails, expect default value
+        opts_attr = field.replace('dependent_startup_', '')
+        value_type_func = ServiceOptions.option_field_type_funcs[field]
+        self.assertEqual(value_type_func(env_value), getattr(service.options, opts_attr))
 
 
-class ServicePriorityTests(SortOrderTestsBase):
-
-    def get_priorities(self, name):
-        service = self.handler._services[name]
-        return Priorites(priority=service.priority, effective=service.priority_effective,
-                         sort=service.priority_sort)
-
-    def test_service_with_default_priority(self):
-        service = 'consul1'
-        self.setup_services(service)
-        priorites = self.get_priorities(service)
-        expected = get_priority()
-        self.assertEqual(expected, priorites)
-
-    def test_service_with_dependent_priority_without_inherit(self):
-        services = ['consul1', 'consul2']
-        priority = 100
-        self.setup_services(services)
-        self.set_service_opts('consul1', priority=priority)
-        self.set_service_opts('consul2', depends={'consul1': ['RUNNING']})
-        priorites = self.get_priorities('consul2')
-        expected = get_priority()
-        self.assertEqual(expected, priorites)
-
-    def test_service_with_priority(self):
-        service = 'consul1'
-        priority = 100
-        self.setup_services(service)
-        self.set_service_opts(service, priority=priority)
-        priorites = self.get_priorities(service)
-        expected = get_priority(priority=priority, effective=priority, sort=priority)
-        self.assertEqual(expected, priorites)
-
-    def test_service_with_inheritet_priority(self):
-        services = ['consul1', 'consul2']
-        priority = 100
-        self.setup_services(services)
-        self.set_service_opts('consul1', priority=priority)
-        self.set_service_opts('consul2', depends={'consul1': ['RUNNING']}, inherit_priority=True)
-        priorites = self.get_priorities('consul2')
-        expected = get_priority(effective=priority, sort=priority)
-        self.assertEqual(expected, priorites)
+expansion_success_config_options_wait_on = [
+    param(field_conf={'field': 'dependent_startup_wait_for',
+                      'env_var': 'DEPENDENT_STARTUP_WAIT_FOR', 'env_value': 'service-parent:running',
+                      'parent_service': "service-parent"})]
 
 
-class SortOrderTests(SortOrderTestsBase):
+class ConfigWaitForEnvVariablesExpansionSuccessTests(common.DependentStartupWithoutEventListenerTestsBase):
 
-    def test_service_sort_order_by_name(self):
-        services = ['consul2', 'consul1']
-        self.setup_services(services)
-        ordered = self.get_sorted_services()
-        self.assertEqual(ordered, sorted(services))
+    def fix_incompatibility(self, service_args):
+        if 'autostart' in service_args:
+            value = config_utils.expand_string('autostart', service_args.get('autostart'))
+            if config_utils.safe_boolean(value) is True:
+                service_args['dependent_startup'] = 'false'
+        else:
+            service_args['autostart'] = 'false'
 
-    def test_service_sort_by_priority(self):
-        services = ['consul2', 'consul1']
-        self.setup_services(services)
-        self.set_service_opts('consul2', priority=100)
-        ordered = self.get_sorted_services()
-        self.assertEqual(ordered, services)
+            if 'dependent_startup' in service_args:
+                if config_utils.safe_boolean(service_args['dependent_startup']) is True:
+                    service_args['autostart'] = 'false'
+            else:
+                service_args['dependent_startup'] = 'true'
 
-    def test_service_sort_by_dependency(self):
-        services = ['consul2', 'consul1']
-        self.setup_services(services)
-        self.set_service_opts('consul2', depends={'consul1': ['RUNNING']}, priority=100)
-        ordered = self.get_sorted_services()
-        self.assertEqual(sorted(services), ordered)
+    @parameterized.expand(expansion_success_config_options_wait_on, testcase_func_name=unit_test_name_func)
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_wait_for_with_env_var_expansion(self, field_conf):
+        field = field_conf['field']
+        env_var = field_conf['env_var']
+        env_value = field_conf['env_value']
 
-    def test_sort_by_dependency_where_two_have_the_same_dependency(self):
-        services = ['consul', 'consul2', 'consul1']
-        self.setup_services(services)
-        # consul1 and consul2 have the same dependcy, and is therefore sorted by name
-        self.set_service_opts('consul1', depends={'consul': ['RUNNING']})
-        self.set_service_opts('consul2', depends={'consul': ['RUNNING']})
-        ordered = self.get_sorted_services()
-        self.assertEqual(sorted(services), ordered)
+        self.write_supervisord_config()
+        env_var_expansion = "ENV_%s" % env_var
+        field_value = "%({})s".format(env_var_expansion)
+        os.environ[env_var] = str(env_value)
 
-    def test_sort_by_dependency_where_two_have_the_same_dependency_but_different_priority(self):
-        services = ['consul', 'consul2', 'consul1']
-        self.setup_services(services)
-        # consul1 and consul2 have the same dependcy, but consul2 has lower priority so comes before
-        self.set_service_opts('consul1', depends={'consul': ['RUNNING']})
-        self.set_service_opts('consul2', depends={'consul': ['RUNNING']}, priority=100)
-        ordered = self.get_sorted_services()
-        self.assertEqual(services, ordered)
+        parent_service = field_conf['parent_service']
+        self.add_service_file(parent_service, autostart='false')
 
-    def test_sort_by_dependency_where_two_have_the_same_dependency_but_one_inherits_priority_from_dependency(self):
-        services = ['consul', 'consul2', 'consul1']
-        self.setup_services(services)
-        # consul1 and consul2 have the same dependcy, but consul2 inherits lower priority from consul so comes before
-        self.set_service_opts('consul', priority=100)
-        self.set_service_opts('consul1', depends={'consul': ['RUNNING']})
-        self.set_service_opts('consul2', depends={'consul': ['RUNNING']}, inherit_priority=True)
-        ordered = self.get_sorted_services()
-        self.assertEqual(services, ordered)
+        service_args = {field: field_value, 'autostart': 'false'}
+        self.fix_incompatibility(service_args)
+        self.add_service_file("service-child", **service_args)
+        self.setup_eventlistener()
 
-    def test_sort_by_dependency_where_two_have_the_same_dependency_but_one_inherits_priority_and_one_has_custom(self):
-        services = ['consul', 'consul2', 'consul1']
-        self.setup_services(services)
-        # consul1 and consul2 have the same dependcy, but consul2 inherits lower priority from consul so comes before
-        self.set_service_opts('consul', priority=100)
-        self.set_service_opts('consul1', depends={'consul': ['RUNNING']}, priority=99)
-        self.set_service_opts('consul2', depends={'consul': ['RUNNING']}, inherit_priority=True)
-        ordered = self.get_sorted_services()
-        # consul1's prioriyty 99 is lower than consul2's inheritet priority 100
-        self.assertEqual(sorted(services), ordered)
+        service = self.monitor.services_handler._services["service-child"]
+        self.assertTrue(parent_service in service.options.wait_for_services)
 
 
-class SortOrderMultipleDependenciesTests(SortOrderTestsBase):
+expansion_fail_config_option_fields = [
+    ('priority', 'ENV_PRIORITY'),
+    ('autostart', 'ENV_AUTOSTART'),
+    ('dependent_startup', 'ENV_DEPENDENT_STARTUP'),
+    ('dependent_startup_inherit_priority', 'ENV_DEPENDENT_STARTUP_INHERIT_PRIORITY'),
+    ('dependent_startup_wait_for', 'ENV_DEPENDENT_STARTUP_WAIT_FOR')]
 
-    def setUp(self):
-        super(SortOrderMultipleDependenciesTests, self).setUp()
-        # Define in reverse sort order to ensure sorting is necessary
-        services = sorted(['consul', 'consul3', 'slurmd', 'consul2', 'slurmd2', 'slurmd3', 'slurmd4'], reverse=True)
-        self.setup_services(services)
 
-        self.set_service_opts('consul2', depends={'consul': ['RUNNING']})
-        self.set_service_opts('consul3', depends={'consul': ['RUNNING'], 'consul2': ['RUNNING']})
-        self.set_service_opts('slurmd', depends={'consul': ['RUNNING']})
-        self.set_service_opts('slurmd2', depends={'consul': ['RUNNING'], 'slurmd': ['RUNNING']})
-        self.set_service_opts('slurmd3', depends={'consul': ['RUNNING'], 'slurmd': ['RUNNING']})
-        self.set_service_opts('slurmd4', depends={'consul': ['RUNNING'], 'slurmd': ['RUNNING']})
+@mock.patch.dict(os.environ, {'ONLY_VAR': ''}, clear=True)
+class ConfigEnvVariablesExpansionFailTests(common.DependentStartupWithoutEventListenerTestsBase):
 
-    def test_sort_default(self):
-        ordered = self.get_sorted_services()
-        # Each line is grouped by dependency tree level
-        expected = [
-            # 1: No dependencies
-            'consul',
-            # 2: sorted by name
-            'consul2', 'slurmd',
-            # 3: sorted by name
-            'consul3', 'slurmd2', 'slurmd3', 'slurmd4']
+    @parameterized.expand(expansion_fail_config_option_fields)
+    def test_with_no_env_var_available(self, field, env_var):
+        self.write_supervisord_config()
+        field_value = "%({})s".format(env_var)
+        self.add_service_file("service_with_env_var",
+                              **{'dependent_startup': 'false', field: field_value})
 
-        self.assertEqual(expected, ordered)
+        expected_log_msg = ("Error when parsing section "
+                            "'program:service_with_env_var' field: {field}: "
+                            "Format string '{field_value}' for 'program:service_with_env_var.{field}' "
+                            "contains names ('{env_var}') "
+                            "which cannot be expanded. Available names: ENV_ONLY_VAR")
+        expected_log_msg = expected_log_msg.format(field=field, env_var=env_var,
+                                                   field_value=field_value)
 
-    def test_sort_with_priority_in_level_two(self):
-        self.set_service_opts('slurmd', priority=100)
-        ordered = self.get_sorted_services()
-        # Each line is grouped by dependency tree level
-        expected = [
-            # 1: No dependencies
-            'consul',
-            # 2: sorted by priority (slurmd has lowest)
-            'slurmd', 'consul2',
-            # 3: sorted by name
-            'consul3', 'slurmd2', 'slurmd3', 'slurmd4']
-        self.assertEqual(expected, ordered)
+        with LogCapturePrintable() as log_capture:
+            self.setup_eventlistener()
+            self.assertLogContains(
+                log_capture,
+                (plugin_logger_name, 'WARNING', expected_log_msg))
 
-    def test_sort_with_priority_in_level_three(self):
-        self.set_service_opts('slurmd2', priority=100)
-        ordered = self.get_sorted_services()
-        # Each line is grouped by dependency tree level
-        expected = [
-            # 1: No dependencies
-            'consul',
-            # 2: sorted by name
-            'consul2', 'slurmd',
-            # 3: slurmd2 has lowest priority, rest sorted by name
-            'slurmd2', 'consul3', 'slurmd3', 'slurmd4']
-        self.assertEqual(expected, ordered)
+        service = self.monitor.services_handler._services['service_with_env_var']
 
-    def test_sort_with_priority_in_level_two_and_inheritet_priority_in_level_three(self):
-        self.set_service_opts('slurmd', priority=100)
-        self.set_service_opts('slurmd2', inherit_priority=True)
-        ordered = self.get_sorted_services()
-        # Each line is grouped by dependency tree level
-        expected = [
-            # 1: No dependencies
-            'consul',
-            # 2: sorted by priority (slurmd has lowest)
-            'slurmd', 'consul2',
-            # 3: slurmd2 has lowest priority, inheritet from slurm
-            'slurmd2', 'consul3', 'slurmd3', 'slurmd4']
-        self.assertEqual(expected, ordered)
+        # When parsing fails, expect default value
+        opts_attr = field.replace('dependent_startup_', '')
+        default_options = ServiceOptions()
+        self.assertEqual(getattr(default_options, opts_attr), getattr(service.options, opts_attr))
 
-    def test_sort_with_priority_in_level_two_and_both_inheritet_and_manual_priorities_in_level_three(self):
-        self.set_service_opts('slurmd', priority=100)
-        self.set_service_opts('slurmd2', inherit_priority=True)
-        self.set_service_opts('slurmd4', priority=99)
-        ordered = self.get_sorted_services()
-        # Each line is grouped by dependency tree level
-        expected = [
-            # 1: No dependencies
-            'consul',
-            # 2: sorted by priority (slurmd has lowest)
-            'slurmd', 'consul2',
-            # 3: slurmd4 has lowest priority (99),
-            #    slurmd2 has second lowest priority inheritet from slurm, rest by name
-            'slurmd4', 'slurmd2', 'consul3', 'slurmd3']
-        self.assertEqual(expected, ordered)
+
+@mock.patch.dict(os.environ, {'ONLY_VAR': ''}, clear=True)
+class ConfigLoadFailureTests(common.DependentStartupWithoutEventListenerTestsBase):
+
+    def test_that_loading_config_with_both_autostart_and_dependent_startup_true_fails(self):
+        self.write_supervisord_config()
+        self.add_service_file("service_with_env_var",
+                              **{'dependent_startup': 'true', 'autostart': 'true'})
+        self.mock_args.error_action = 'exit'
+        self.setup_eventlistener(load_config=False)
+        with self.assertRaises(DependentStartupError):
+            self.monitor.load_config()
+
+    def test_that_loading_config_with_both_autostart_and_dependent_startup_true_fails_with_log(self):
+        self.write_supervisord_config()
+        service_name = "service_with_env_var"
+        service_conf = self.add_service_file(service_name,
+                                             **{'dependent_startup': 'true',
+                                                'autostart': 'true'})
+        expected_log_msg = ("Error when reading config '{service_conf}': Service '{service_name}' "
+                            "config has dependent_startup set to True, which requires autostart "
+                            "to be set explicitly to false. autostart is currently True")
+        expected_log_msg = expected_log_msg.format(service_conf=service_conf, service_name=service_name)
+
+        with LogCapturePrintable() as log_capture:
+            self.setup_eventlistener(load_config=False)
+            self.monitor.load_config()
+            self.assertLogContains(
+                log_capture,
+                (plugin_logger_name, 'WARNING', expected_log_msg))
+
+    def test_that_loading_config_with_uknown_dependency_fails(self):
+        self.write_supervisord_config()
+        self.add_service_file("service",
+                              **{'dependent_startup': 'true', 'autostart': 'false',
+                                 'dependent_startup_wait_for': "uknown-service:running"})
+        self.mock_args.error_action = 'exit'
+        self.setup_eventlistener(load_config=False)
+        with self.assertRaises(DependentStartupError):
+            self.monitor.load_config()
+
+    def test_that_loading_config_with_uknown_dependency_fails_with_log(self):
+        self.write_supervisord_config()
+        service_name = "service_with_env_var"
+        service_dep = "uknown-service"
+        self.add_service_file(service_name,
+                              **{'dependent_startup': 'true', 'autostart': 'false',
+                                 'dependent_startup_wait_for': "%s:running" % service_dep})
+
+        expected_log_msg = "Service 'service_with_env_var' depends on unknown service '%s'" % service_dep
+        with LogCapturePrintable() as log_capture:
+            self.setup_eventlistener(load_config=False)
+            self.monitor.load_config()
+            self.assertLogContains(
+                log_capture,
+                (plugin_logger_name, 'WARNING', expected_log_msg))
+
+        service = self.monitor.services_handler._services[service_name]
+        self.assertEqual(0, len(service.options.wait_for_services))

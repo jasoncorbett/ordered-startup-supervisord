@@ -26,6 +26,7 @@ except ImportError:
 # isort:imports-thirdparty
 import toposort
 from supervisor import childutils, states
+from supervisor.datatypes import boolean, integer
 from supervisor.options import UnhosedConfigParser
 from supervisor.states import RUNNING_STATES
 
@@ -123,12 +124,9 @@ def get_config_search_paths():
     return search_paths
 
 
-CONFIG_SEARCH_PATHS = get_config_search_paths()
-
-
-def get_default_config_file():
-    for path in CONFIG_SEARCH_PATHS:
-        conf_file = os.path.join(path, 'supervisord.conf')
+def search_for_config_file(paths, config_filename):
+    for path in paths:
+        conf_file = os.path.join(path, config_filename)
         if os.path.exists(conf_file):
             return conf_file
     return None
@@ -138,15 +136,84 @@ class DependentStartupError(Exception):
     pass
 
 
+class ConfigParser(UnhosedConfigParser):
+
+    def safeget(self, section, option, default=None, type_func=None, **kwargs):
+        """
+        Safely get a config value without raising ValueError
+
+        Args:
+            section(str): The section to get the value from
+            option(str): The option name
+            default(any): The value to return if getting the option value fails
+            type_func(func): Function call on the value to convert to proper type
+        """
+        try:
+            value = self.saneget(section, option, default=default, **kwargs)
+            if type_func is not None:
+                value = type_func(value)
+            return value
+        except ValueError as err:
+            log.warn("Error when parsing section '%s' field: %s: %s", section, option, err)
+            return default
+
+
 class ServiceOptions(object):
 
     valid_wait_on_states = ['STARTING', 'RUNNING', 'BACKOFF', 'STOPPING', 'EXITED', 'FATAL']
     wait_for_opts_string = 'dependent_startup_wait_for'
     inherit_priority_opts_string = 'dependent_startup_inherit_priority'
+    option_field_type_funcs = {
+        'priority': integer,
+        'autostart': boolean,
+        'dependent_startup': boolean,
+    }
 
     def __init__(self):
         self.opts = {}
-        self.wait_for = OrderedDict()
+        self.wait_for_services = OrderedDict()
+        ServiceOptions.option_field_type_funcs[self.inherit_priority_opts_string] = boolean
+
+    def parse(self, parser, section_name):
+        """
+        Args:
+            parser(UnhosedConfigParser): the config parser object
+            section_name(str): The name of the section to get the options from
+
+        """
+        def set_option(option, **kwargs):
+            if 'type_func' not in kwargs:
+                kwargs['type_func'] = self.option_field_type_funcs.get(option)
+            option_value = parser.safeget(section_name, option, **kwargs)
+            if option_value is not None:
+                self.opts[option] = option_value
+
+        if parser.has_option(section_name, 'priority'):
+            set_option('priority')
+        if parser.has_option(section_name, 'autostart'):
+            set_option('autostart')
+        if parser.has_option(section_name, 'dependent_startup'):
+            set_option('dependent_startup')
+        if parser.has_option(section_name, self.inherit_priority_opts_string):
+            set_option(self.inherit_priority_opts_string)
+        if parser.has_option(section_name, self.wait_for_opts_string):
+            wait_for = parser.safeget(section_name, self.wait_for_opts_string)
+            if wait_for is not None:
+                self._parse_wait_for(section_name, wait_for)
+
+    def _parse_wait_for(self, section_name, wait_for):
+        for dep in wait_for.split(' '):
+            dep_states = ["RUNNING"]
+            depsplit = dep.split(':')
+            dep_service = depsplit[0]
+            if len(depsplit) == 2:
+                dep_states = [state.upper() for state in depsplit[1].split(',')]
+                for state in list(dep_states):
+                    if state not in self.valid_wait_on_states:
+                        log.warn("Ignoring invalid state '%s' in '%s' for '%s'" %
+                                 (state, self.wait_for_opts_string, section_name))
+                        dep_states.remove(state)
+            self.wait_for_services[dep_service] = dep_states
 
     @property
     def autostart(self):
@@ -164,47 +231,16 @@ class ServiceOptions(object):
     def inherit_priority(self):
         return self.opts.get(self.inherit_priority_opts_string, False)
 
-    def parse(self, parser, section_name):
-        """
-        Args:
-            parser(UnhosedConfigParser): the config parser object
-            section_name(str): The name of the section to get the options from
-
-        """
-        if parser.has_option(section_name, 'priority'):
-            self.opts['priority'] = parser.getint(section_name, 'priority')
-        if parser.has_option(section_name, 'autostart'):
-            self.opts['autostart'] = parser.getboolean(section_name, 'autostart')
-        if parser.has_option(section_name, 'dependent_startup'):
-            self.opts['dependent_startup'] = parser.getboolean(section_name, 'dependent_startup')
-        if parser.has_option(section_name, self.inherit_priority_opts_string):
-            self.opts[self.inherit_priority_opts_string] = parser.getboolean(section_name,
-                                                                             self.inherit_priority_opts_string)
-        if parser.has_option(section_name, self.wait_for_opts_string):
-            wait_for = parser.get(section_name, self.wait_for_opts_string)
-            for dep in wait_for.split(' '):
-                dep_states = ["RUNNING"]
-                depsplit = dep.split(':')
-                dep_service = depsplit[0]
-                if len(depsplit) == 2:
-                    dep_states = [state.upper() for state in depsplit[1].split(',')]
-                    for state in list(dep_states):
-                        if state not in self.valid_wait_on_states:
-                            log.warn("Ignoring invalid state '%s' in '%s' for '%s'" %
-                                     (state, self.wait_for_opts_string, section_name))
-                            dep_states.remove(state)
-
-                self.wait_for[dep_service] = dep_states
-
-    def wait_for_str(self):
-        if self.wait_for:
-            return " ".join(["%s:%s" % (dep, ",".join(state for state in self.wait_for[dep]))
-                             for dep in self.wait_for])
+    @property
+    def wait_for(self):
+        if self.wait_for_services:
+            return " ".join(["%s:%s" % (dep, ",".join(state for state in self.wait_for_services[dep]))
+                             for dep in self.wait_for_services])
         else:
             None
 
     def wait_for_state(self, dep):
-        return ",".join(state for state in self.wait_for[dep])
+        return ",".join(state for state in self.wait_for_services[dep])
 
     def __str__(self):
         attrs = []
@@ -212,8 +248,8 @@ class ServiceOptions(object):
             if attr in self.opts:
                 attrs.append("%s: %s" % (attr, self.opts[attr]))
 
-        if self.wait_for:
-            attrs.append("%s: %s" % (self.wait_for_opts_string, str(self.wait_for)))
+        if self.wait_for_services:
+            attrs.append("%s: %s" % (self.wait_for_opts_string, str(self.wait_for_services)))
 
         ret = ", ".join(attrs)
         return ret
@@ -224,9 +260,8 @@ class Service(object):
     # The default priority used by supervisor when no priority is set
     default_priority_sort = 999
 
-    def __init__(self, args, services_handler):
+    def __init__(self, services_handler):
         self.name = None
-        self.args = args
         self.services_handler = services_handler
         self.options = None
         self.states_reached = []
@@ -246,13 +281,20 @@ class Service(object):
             error_msg = None
 
             if self.options.autostart:
-                error_msg = ("Service '%s': dependent_startup is True, "
-                             "and autostart is not false" % self.name)
+                error_msg = ("Service '%s' config has dependent_startup set to %s, "
+                             "which requires autostart to be set explicitly to false. "
+                             "autostart is currently %s" %
+                             (self.name, self.options.dependent_startup,
+                              self.options.opts.get('autostart', 'not set')))
                 log.warn("Error when reading config '%s': %s" %
                          (parser.section_to_file[section_name], error_msg))
 
-            if self.args.fail_on_warning and error_msg:
-                raise DependentStartupError(error_msg)
+            if error_msg:
+                if self.services_handler.args.error_action == 'exit':
+                    raise DependentStartupError(error_msg)
+                elif self.services_handler.args.error_action in ['skip', 'ignore']:
+                    log.warn("Disable handling service '%s'" % (self.name))
+                    self.options.opts['dependent_startup'] = False
 
     def has_reached_state(self, state):
         return state in self.states_reached
@@ -268,7 +310,7 @@ class Service(object):
             priority = self.priority
 
         if self.options.inherit_priority:
-            for dep in self.options.wait_for:
+            for dep in self.options.wait_for_services:
                 priority = min(priority, self.services_handler._services[dep].priority_sort)
         return priority
 
@@ -287,7 +329,8 @@ class Service(object):
         """
         Return set of dependies in self that other does not have
         """
-        return set(self.options.wait_for.keys()).difference(set(other.options.wait_for.keys()))
+        return set(self.options.wait_for_services.keys()).difference(
+            set(other.options.wait_for_services.keys()))
 
     def __str__(self):
         return "Service(name=%s, %s)" % (self.name, str(self.options))
@@ -347,27 +390,49 @@ class ServicesHandler(ProcessHandler):
     """ServicesHandler keep track of all the services managed by supervisor
     """
 
-    def __init__(self, rpc):
+    def __init__(self, rpc, args):
         super(ServicesHandler, self).__init__(rpc)
         self.max_name_len = 0
         self.indent = 0
+        self.args = args
         self._services = OrderedDict()
 
-    def parse_config(self, args, parser):
+    def parse_config(self, parser):
+        environ_expansions = {}
+        for k, v in os.environ.items():
+            environ_expansions['ENV_%s' % k] = v
+        parser.expansions = environ_expansions
+        log.debug("Parsing config with the following expansions: %s", environ_expansions)
+
         for section_name in parser.sections():
             if section_name.startswith('program:'):
-                service = Service(args, self)
+                service = Service(self)
                 service.parse_section(parser, section_name)
                 self._services[service.name] = service
 
+        self.verify_dependencies()
         ordered = self.get_sorted_services_list()
         ordered_services = OrderedDict([(s_name, self._services[s_name]) for s_name in ordered])
         self._services = ordered_services
 
+    def verify_dependencies(self):
+        for sname, v in self._services.items():
+            deps = set(v.options.wait_for_services.keys())
+            for dep in deps:
+                if dep not in self._services:
+                    msg = "Service '%s' depends on unknown service '%s'" % (sname, dep)
+                    log.warn(msg)
+                    if self.args.error_action == 'exit':
+                        raise DependentStartupError(msg)
+                    else:
+                        # Must remove the dependency
+                        log.warn("Removing dependency '%s' from service %s", dep, sname)
+                        del v.options.wait_for_services[dep]
+
     def get_sorted_services_list(self):
         deps_dict = {}
         for k, v in self._services.items():
-            deps_dict[k] = set(v.options.wait_for.keys())
+            deps_dict[k] = set(v.options.wait_for_services.keys())
 
         try:
             result = []
@@ -383,9 +448,9 @@ class ServicesHandler(ProcessHandler):
             raise DependentStartupError(err)
 
     def service_wait_for_satisifed(self, service):
-        for dep_service in service.options.wait_for:
+        for dep_service in service.options.wait_for_services:
             satisifed = False
-            for required_state in service.options.wait_for[dep_service]:
+            for required_state in service.options.wait_for_services[dep_service]:
                 if self._services[dep_service].has_reached_state(required_state):
                     satisifed = True
 
@@ -421,8 +486,8 @@ class ServicesHandler(ProcessHandler):
         state = self.get_service_state(name)
         ret = ("%-{}s  state: %-8s   dependent_startup: %-5s".format(self.max_name_len) %
                (service.name, state, service.options.dependent_startup))
-        if service.options.wait_for:
-            ret += "  wait_for: '%s'" % service.options.wait_for_str()
+        if service.options.wait_for_services:
+            ret += "  wait_for: '%s'" % service.options.wait_for
 
         effective = service.priority_effective
         if effective is not None:
@@ -442,15 +507,11 @@ class DependentStartup(object):
     process_state_events = ['PROCESS_STATE']
 
     def __init__(self, args, config_file, **kwargs):
-        self.args = args
         self.config_file = config_file
         self.interval = kwargs.get('interval', 1.0)
-
-        self.debug = kwargs.get('debug', False)
         self.stdin = kwargs.get('stdin', sys.stdin)
         self.stdout = kwargs.get('stdout', sys.stdout)
         self.stderr = kwargs.get('stderr', sys.stderr)
-
         self.rpc = kwargs.get('rpcinterface', None)
         if not self.rpc:
             self.rpc = childutils.getRPCInterface(os.environ)
@@ -463,11 +524,17 @@ class DependentStartup(object):
         self.startup_done = False
         self.start_first = None
         self.plugin_initialized = False
+        self.services_handler = ServicesHandler(self.rpc, args)
 
-        parser = UnhosedConfigParser()
+        log.debug("Args: %s" % args)
+        if kwargs.get('load_config', True) is True:
+            self.load_config()
+
+    def load_config(self):
+        log.info("Reading supervisor config: %s" % self.config_file)
+        parser = ConfigParser()
         parser.read(get_all_configs(self.config_file))
-        self.services_handler = ServicesHandler(self.rpc)
-        self.services_handler.parse_config(args, parser)
+        self.services_handler.parse_config(parser)
 
     def write_stderr(self, msg):
         self.stderr.write(msg)
@@ -570,8 +637,6 @@ class DependentStartup(object):
     def run_and_listen(self):
         log.info("")
         log.info("")
-        log.info("Reading supervisor config: %s" % self.config_file)
-        log.debug("Args: %s" % self.args)
         self.run()
         self.listen()
 
@@ -601,7 +666,7 @@ default_log_format = "%(asctime)s - %(name)s - [%(levelname)-7s] %(message)s"
 
 
 def main():
-    global log
+    search_paths = get_config_search_paths()
     parser = argparse.ArgumentParser()
     parser.add_argument('--log-file', help="Log to file instead of stderr")
     parser.add_argument('--log-level', choices=log_str_to_levels.keys(), default="info",
@@ -610,9 +675,14 @@ def main():
                         help="Logging format. Default: %(default)s")
     parser.add_argument('-c', '--config', help="Full path to the supervisor config file. "
                         "If not provided, the config will be searched for in the following "
-                        "paths: '%s'" % "'\n'".join(CONFIG_SEARCH_PATHS))
+                        "paths: '%s'" % "'\n'".join(search_paths))
+    parser.add_argument('--config-filename', default="supervisord.conf",
+                        help="The name of the config file to search for "
+                        "if the config is not provided. Default: %(default)s")
     parser.add_argument('--fail-on-warning', default=False, action='store_true',
-                        help="Exit with error if encountering warnings")
+                        help=argparse.SUPPRESS)
+    parser.add_argument('--error-action', default='skip', choices=['exit', 'skip', 'ignore'],
+                        help="The action to perform when encountering service config errors")
     args = parser.parse_args()
 
     log_level = get_level_from_string(args.log_level, default='info')
@@ -622,29 +692,34 @@ def main():
     else:
         logging.basicConfig(stream=sys.stderr, level=log_level, format=args.log_format)
 
+    if args.fail_on_warning:
+        args.error_action = "exit"
+
     log.info("")
     log.info("supervisord-dependent-startup event listener starting...")
 
-    try:
-        config_file = None
-        if args.config:
-            config_file = args.config
-        else:
-            config_file = get_default_config_file()
+    config_file = None
+    if args.config:
+        config_file = args.config
+    else:
+        config_file = search_for_config_file(search_paths, args.config_filename)
 
-        if config_file is None:
-            log.warn("Unable to find a config file")
-            return 4
-        if not os.path.exists(config_file):
-            log.warn("Config path {} does not exist!".format(config_file))
-            return 2
+    if config_file is None:
+        log.warn("Unable to find a config file")
+        return 4
+    if not os.path.exists(config_file):
+        log.warn("Config path {} does not exist!".format(config_file))
+        return 2
 
-        event_listener = DependentStartup(args, config_file)
-        event_listener.run_and_listen()
-    except:  # noqa: E722
-        log.error("Error occured: %s", exc_info=sys.exc_info())
-        return 3
+    event_listener = DependentStartup(args, config_file)
+    event_listener.run_and_listen()
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    exit_code = 0
+    try:
+        exit_code = main()
+    except:  # noqa: E722
+        log.error("Error occured:", exc_info=sys.exc_info())
+        exit_code = 3
+    sys.exit(exit_code)

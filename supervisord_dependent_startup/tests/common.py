@@ -20,9 +20,6 @@ try:
 except ImportError:
     import mock
 
-# isort:imports-firstparty
-from supervisord_dependent_startup import supervisord_dependent_startup
-
 # isort:imports-localfolder
 from . import DependentStartup, StringIO, cleanup_tmp_dir, helpers, test_tmp_dir, utils
 from .utils import colored, cprint
@@ -56,7 +53,7 @@ supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 serverurl=unix://{{ tmp_dir }}/supervisor.sock ; use a unix:// URL  for a unix socket
 
 [eventlistener:%(plugin_name)s]
-command=python2 {{ dependent_startup_script }} -c /tmp/tmp_home/etc/supervisord.conf
+command={{ supervisord_dependent_startup }} -c /tmp/tmp_home/etc/supervisord.conf
 stderr_logfile={{ dependent_startup_log_dir }}/%%(program_name)s-err.log
 autostart=true
 events=PROCESS_STATE
@@ -76,22 +73,22 @@ stdout_logfile={{ dependent_startup_log_dir }}/%(program_name)s.log
 priority={{ priority }}
 {%- endif %}
 {%- if autostart is defined %}
-autostart={{ autostart|lower }}
+autostart={{ autostart }}
 {%- endif %}
 {%- if autorestart is defined %}
-autorestart={{ autorestart|lower }}
+autorestart={{ autorestart }}
 {%- endif %}
 {%- if startsecs is defined %}
 startsecs={{ startsecs }}
 {%- endif %}
 {%- if dependent_startup is defined %}
-dependent_startup={{ dependent_startup|lower }}
+dependent_startup={{ dependent_startup }}
 {%- endif %}
 {%- if dependent_startup_wait_for is defined %}
 dependent_startup_wait_for={{ dependent_startup_wait_for }}
 {%- endif %}
 {%- if dependent_startup_inherit_priority is defined %}
-dependent_startup_inherit_priority={{ dependent_startup_inherit_priority|lower }}
+dependent_startup_inherit_priority={{ dependent_startup_inherit_priority }}
 {%- endif %}
 
 """
@@ -125,11 +122,14 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
     * Utility functions to create the configuration objects for supervisor
 
     """
+    def tearDown(self):
+        super(DependentStartupSupervisorTestsBase, self).tearDown()
+        del self.tmpdir  # MUST delete this to trigger call to __exit__
 
     def setUp(self):
         super(DependentStartupSupervisorTestsBase, self).setUp()
         # Create a temporary dir to store the supervisor config files
-        self.tmpdir = helpers.TempDir(name=test_tmp_dir,
+        self.tmpdir = helpers.TempDir(name=test_tmp_dir, id=self.id(),
                                       cleanup=cleanup_tmp_dir,
                                       prefix='dependent_startup_unit_test_')
 
@@ -145,15 +145,10 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         utils.mkdir(self.log_dir)
 
         self.supervisor_conf = os.path.join(self.etc, 'supervisord.conf')
-        dependent_startup_file = supervisord_dependent_startup.__file__
-
-        if dependent_startup_file.endswith('pyc'):
-            dependent_startup_file = dependent_startup_file[:-1]
-
         logger.info("Using supervisor base dir: %s", self.supervisor_base)
 
         self.base_args = {'etc_dir': self.etc,
-                          'dependent_startup_script': dependent_startup_file,
+                          'supervisord_dependent_startup': 'supervisord-dependent-startup',
                           'dependent_startup_log_dir': self.log_dir,
                           'tmp_dir': self.tmp,
                           'dependent_startup': 'true',
@@ -163,11 +158,9 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         self.processes_started = []
         self.testProcessClass = DummyProcess
         self.supervisord = None
+        self.mock_args = mock.Mock(error_action='skip')
 
-    def _get_target_class(self):
-        return DependentStartupTester
-
-    def _make_one_mocked(self, **kwargs):
+    def get_dependent_startup_mock(self, **kwargs):
         if 'stdin' not in kwargs:
             kwargs['stdin'] = StringIO()
         if 'stdout' not in kwargs:
@@ -175,10 +168,9 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         if 'stderr' not in kwargs:
             kwargs['stderr'] = StringIO()
 
-        args = mock.Mock()
+        args = kwargs.pop('args', self.mock_args)
         config_file = self.supervisor_conf
-        obj = self._get_target_class()(args, config_file, **kwargs)
-        obj.send_batch_notification = mock.Mock()
+        obj = DependentStartupTester(args, config_file, **kwargs)
         return obj
 
     def write_config(self, output_file, template, args):
@@ -191,7 +183,7 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         args = dict(self.base_args)
         self.write_config(self.supervisor_conf, supervisord_conf_template, args)
 
-    def add_service_file(self, name, cmd, **extra_args):
+    def add_service_file(self, name, cmd="/bin/sleep 100", **extra_args):
         args = dict(self.base_args)
         args['name'] = name
         args['command'] = cmd
@@ -199,8 +191,9 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         if extra_args:
             args.update(extra_args)
 
-        if args.get('autostart') is True:
-            args['dependent_startup'] = 'false'
+        for a in args:
+            if type(args[a]) is bool:
+                args[a] = str(args[a]).lower()
 
         self.service_conf = os.path.join(self.supervisord_d, "%s.ini" % name)
         self.write_config(self.service_conf, service_conf_template, args)
@@ -416,14 +409,27 @@ class StdinIOStringWrapper(object):
         self.buffer.seek(pos)
 
 
-class DependentStartupTestsBase(DependentStartupSupervisorTestsBase):
+class MockRPCInterfaceTestsBase(DependentStartupSupervisorTestsBase):
+
+    def setUp(self):
+        super(MockRPCInterfaceTestsBase, self).setUp()
+        self.rpc_patcher = mock.patch('supervisor.childutils.getRPCInterface')
+        self.mock_get_rpc_interface = self.rpc_patcher.start()
+
+    def tearDown(self):
+        super(MockRPCInterfaceTestsBase, self).tearDown()
+        self.rpc_patcher.stop()
+
+
+class DependentStartupTestsBase(MockRPCInterfaceTestsBase):
 
     def setUp(self):
         super(DependentStartupTestsBase, self).setUp()
         self.options = DummyOptions()
 
-    def setup_supervisord(self, mock_get_rpc_interface):
-        self.mock_get_rpc_interface = mock_get_rpc_interface
+    def setup_supervisord(self, mock_get_rpc_interface=None):
+        if mock_get_rpc_interface is None:
+            mock_get_rpc_interface = self.mock_get_rpc_interface
         self.supervisord = Supervisor(self.options)
         self.supervisord.options.process_group_configs = self.process_group_configs
         self.rpc = self.rpcinterface_class(self.supervisord)
@@ -432,6 +438,9 @@ class DependentStartupTestsBase(DependentStartupSupervisorTestsBase):
             self.rpc.addProcessGroup(p)
             self.rpc.supervisord.process_groups[p].processes = {p: self.processes[p]}
 
+        # When calling supervisor.childutils.getRPCInterface, return itself
+        mock_get_rpc_interface.return_value = mock_get_rpc_interface
+        # When accessing supervisor attribute, return the rpc object
         type(mock_get_rpc_interface).supervisor = mock.PropertyMock(return_value=self.rpc)
 
     def monitor_run_and_listen_action(self, count):
@@ -487,9 +496,12 @@ class DependentStartupWithoutEventListenerTestsBase(DependentStartupTestsBase):
 
         self.stdin_wrapper.add_event(event)
 
-    def setup_supervisord(self, mock_get_rpc_interface):
-        super(DependentStartupWithoutEventListenerTestsBase, self).setup_supervisord(mock_get_rpc_interface)
-        self.monitor = self._make_one_mocked(stdin=self.stdin_wrapper, rpcinterface=mock_get_rpc_interface)
+    def setup_eventlistener(self, mock_get_rpc_interface=None, **kwargs):
+        super(DependentStartupWithoutEventListenerTestsBase, self).setup_supervisord(
+            mock_get_rpc_interface=mock_get_rpc_interface)
+        self.monitor = self.get_dependent_startup_mock(stdin=self.stdin_wrapper,
+                                                       rpcinterface=mock_get_rpc_interface,
+                                                       **kwargs)
 
     def monitor_run_and_listen_until_no_more_events(self):
         # We need to add an initial event to trigger the plugin to start handling the services
@@ -505,10 +517,12 @@ class WithEventListenerProcessTestsBase(DependentStartupTestsBase):
         self.stdout = StringIO()
         self.stdin_wrapper = StdinIOStringWrapper()
 
-    def setup_supervisord(self, mock_get_rpc_interface):
-        super(WithEventListenerProcessTestsBase, self).setup_supervisord(mock_get_rpc_interface)
-        self.monitor = self._make_one_mocked(stdin=self.stdin_wrapper,
-                                             stdout=self.stdout, rpcinterface=mock_get_rpc_interface)
+    def setup_eventlistener(self, mock_get_rpc_interface=None, **kwargs):
+        super(WithEventListenerProcessTestsBase, self).setup_supervisord(
+            mock_get_rpc_interface=mock_get_rpc_interface)
+        self.monitor = self.get_dependent_startup_mock(stdin=self.stdin_wrapper,
+                                                       stdout=self.stdout,
+                                                       rpcinterface=mock_get_rpc_interface, **kwargs)
 
     def monitor_run_and_listen_until_no_more_events(self):
         # We need to add an initial event to trigger the plugin to start handling the services

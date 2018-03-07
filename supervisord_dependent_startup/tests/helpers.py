@@ -14,19 +14,31 @@ logger = logging.getLogger(utils.plugin_tests_logger_name)
 
 class LogCapturePrintable(LogCapture):
 
-    list_fmt = "{name}  {filename}:{lineno:<4} [{levelname:7}]  {msg}\n"
+    list_fmt = "[{index}] {name}  {filename}:{lineno:<4} [{levelname:7}]  {getMessage}\n"
+
+    def __init__(self, **args):
+        # Set names to capture only the plugin logger
+        args['names'] = (utils.plugin_logger_name, )
+        super(LogCapturePrintable, self).__init__(**args)
+        self.list_attributes = ('name', 'levelname', 'getMessage', 'filename', 'lineno', 'msg')
+
+    def _row_attrs(self, record, attributes):
+        for a in attributes:
+            value = getattr(record, a, None)
+            if callable(value):
+                value = value()
+            yield a, value
 
     def __str__(self):
         if not self.records:
-            return 'No logging captured'
+            return 'No log statements captured for logs: %s' % (self.names)
         ret = ""
         for i, e in enumerate(self.actual()):
-            ret += self.list_fmt.format(index=i, **self.records[i].__dict__)
+            record = self.records[i]
+            params = {a: v for a, v in self._row_attrs(record, self.list_attributes)}
+            params['index'] = i
+            ret += self.list_fmt.format(**params)
         return ret
-
-    def __init__(self, **args):
-        args['names'] = (utils.plugin_logger_name, )
-        super(LogCapturePrintable, self).__init__(**args)
 
 
 class TempDir(object):
@@ -36,7 +48,7 @@ class TempDir(object):
     All files created within the directory are destroyed
 
     """
-    def __init__(self, suffix="", prefix=None, basedir=None, name=None, clear=True, cleanup=True):
+    def __init__(self, suffix="", prefix=None, basedir=None, name=None, clear=True, cleanup=True, id=None):
         """
         Args:
             suffix(str): Suffix to add to directory name
@@ -48,6 +60,7 @@ class TempDir(object):
         If name is given, no random name value will be generated.
         """
         self.cleanup = cleanup
+        self.id = id
         if prefix is None:
             prefix = tempfile.gettempprefix()
         if basedir is None:
@@ -82,11 +95,16 @@ class TempDir(object):
     def dissolve(self):
         """remove all files and directories created within the tempdir"""
         if self.name and self.cleanup:
-            shutil.rmtree(self.name)
+            try:
+                shutil.rmtree(self.name)
+            except OSError as err:
+                logger.warn("Error when cleaning up directory %s%s: %s", self.name, " (id: %s)" % self.id, err)
+                raise
+
         self.name = ""
 
     def __str__(self):
         if self.name:
-            return "temporary directory at: %s" % (self.name,)
+            return "temporary directory at: %s%s" % (self.name, " (id: %s)" % self.id)
         else:
             return "dissolved temporary directory"

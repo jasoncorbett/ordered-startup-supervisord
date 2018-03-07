@@ -9,6 +9,7 @@ from supervisord_dependent_startup.supervisord_dependent_startup import (Depende
                                                                          default_log_format,
                                                                          get_all_configs,
                                                                          get_level_from_string,
+                                                                         get_str_from_level,
                                                                          plugin_logger_name,
                                                                          process_states)
 
@@ -16,7 +17,7 @@ from .utils import setup_tests_logging
 
 __all__ = ['DependentStartup', 'ServiceOptions', 'DependentStartupError', 'Service',
            'ServicesHandler', 'get_all_configs', 'process_states', 'StringIO',
-           'plugin_logger_name', 'get_level_from_string']
+           'plugin_logger_name', 'get_level_from_string', 'get_str_from_level']
 
 
 env_tests_log_level = os.environ.get('TESTS_LOG_LEVEL', "")

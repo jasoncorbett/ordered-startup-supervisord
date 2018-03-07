@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.1.0) - _2018-03-07_
+[Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.0.0...v1.1.0)
+
+### Added
+- Support for environment variable expansion in service config files
+
+
 ## [1.0.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.0.0) - _2018-01-03_
 [Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/54e32080e673f1548c5d97ed483805d63754656a...v1.0.0)
 

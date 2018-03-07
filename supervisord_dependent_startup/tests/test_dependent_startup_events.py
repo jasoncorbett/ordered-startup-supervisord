@@ -5,6 +5,8 @@ import logging
 from supervisor import events
 from supervisor.process import ProcessStates, Subprocess
 
+from supervisord_dependent_startup.supervisord_dependent_startup import main
+
 from . import DependentStartupError, common, process_states
 from .common import DefaultTestRPCInterface, dependent_startup_service_name, mock
 from .helpers import LogCapturePrintable
@@ -93,28 +95,26 @@ class DependentStartupEventSuccessTests(DependentStartupEventTestsBase):
 
         self.rpcinterface_class = TestRPCInterface
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_run_with_two_services_started_simultaneously_with_priorities(self, mock_get_rpc_interface):
+    def test_run_with_two_services_started_simultaneously_with_priorities(self):
         self.add_test_service('consul', self.options)
         self.add_test_service('consul2', self.options, dependent_startup_wait_for="consul:running", priority=10)
         self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running", priority=15)
         self.add_test_service('slurmd2', self.options, dependent_startup_wait_for="consul:running slurmd:running")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
 
         procs = ['consul', 'consul2', 'slurmd', 'slurmd2']
         self.assertEqual(self.processes_started, procs)
         self.assertStateProcsRunning(procs)
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_run_with_two_services_started_simultaneously_without_priorities(self, mock_get_rpc_interface):
+    def test_run_with_two_services_started_simultaneously_without_priorities(self):
         self.add_test_service('consul', self.options)
         self.add_test_service('consul2', self.options, dependent_startup_wait_for="consul:running")
         self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running")
         self.add_test_service('slurmd2', self.options, dependent_startup_wait_for="consul:running slurmd:running")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
         # self.monitor_print_batchmsgs()
 
@@ -122,15 +122,14 @@ class DependentStartupEventSuccessTests(DependentStartupEventTestsBase):
         self.assertEqual(self.processes_started, procs)
         self.assertStateProcsRunning(procs)
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_start_service_with_no_file_failure_20(self, mock_get_rpc_interface):
+    def test_start_service_with_no_file_failure_20(self):
         self.add_test_service('consul', self.options)
         # slurmd should fail to start. Command MUST be '/bad/filename',
         # as it's hardcoded tests/base.py:DummyOptions
         self.add_test_service('slurmd', self.options, pid=True,
                               dependent_startup_wait_for="consul:running", cmd='/bad/filename')
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         with LogCapturePrintable() as log_capture:
             self.monitor_run_and_listen_until_no_more_events()
             self.assertLogContains(log_capture,
@@ -141,21 +140,19 @@ class DependentStartupEventSuccessTests(DependentStartupEventTestsBase):
         self.assertStateProcs([('consul', 'RUNNING'),
                                ('slurmd', 'STOPPED')])
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_start_service_with_circular_dependency(self, mock_get_rpc_interface):
+    def test_start_service_with_circular_dependency(self):
         self.add_test_service('consul', self.options, dependent_startup_wait_for="consul3:running")
         self.add_test_service('consul2', self.options, dependent_startup_wait_for="consul:running")
         self.add_test_service('consul3', self.options, dependent_startup_wait_for="consul2:running")
 
         with self.assertRaises(DependentStartupError) as context:
-            self.setup_supervisord(mock_get_rpc_interface)
+            self.setup_eventlistener()
             self.monitor_run_and_listen_until_no_more_events()
         self.assertEqual(str(context.exception.message),
                          "Circular dependencies exist among these items: "
                          "{'consul':set(['consul3']), 'consul2':set(['consul']), 'consul3':set(['consul2'])}")
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_start_service_check_order(self, mock_get_rpc_interface):
+    def test_start_service_check_order(self):
         self.add_test_service('consul', self.options)
         self.add_test_service('consul2', self.options, dependent_startup_wait_for="consul:running")
         self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running")
@@ -164,21 +161,20 @@ class DependentStartupEventSuccessTests(DependentStartupEventTestsBase):
         self.add_test_service('slurmd3', self.options,
                               dependent_startup_wait_for="consul:running slurmd:running", priority=100)
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
 
         procs = ['consul', 'consul2', 'slurmd', 'slurmd3', 'slurmd2']
         self.assertEqual(procs, self.processes_started)
         self.assertStateProcsRunning(procs)
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_not_starting_service_not_satisfying_deps(self, mock_get_rpc_interface):
+    def test_not_starting_service_not_satisfying_deps(self):
         self.add_test_service('consul', self.options)
         self.add_test_service('unhandled', self.options, autostart=True)
         self.add_test_service('slurmd', self.options,
                               dependent_startup_wait_for="consul:running unhandled:running")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
 
         # self.print_procs()
@@ -186,6 +182,20 @@ class DependentStartupEventSuccessTests(DependentStartupEventTestsBase):
         self.assertStateProcs([('consul', 'RUNNING'),
                                ('slurmd', 'STOPPED'),
                                ('unhandled', 'STOPPED')])
+
+    def test_run_main(self):
+        self.write_supervisord_config()
+
+        self.add_test_service('consul', self.options)
+        self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running", priority=10)
+        self.add_test_service('slurmd2', self.options, dependent_startup_wait_for="consul:running slurmd:running")
+
+        self.setup_supervisord()
+        testargs = [self.supervisor_conf]
+
+        with mock.patch.multiple('sys', argv=testargs, stdin=self.stdin_wrapper, stdout=self.stdout):
+            with self.assertRaises(common.UnitTestException):
+                main()
 
 
 class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
@@ -202,15 +212,14 @@ class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
 
         self.rpcinterface_class = TestRPCInterface
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_start_service_on_already_running_service(self, mock_get_rpc_interface):
+    def test_start_service_on_already_running_service(self):
         self.add_test_service('consul', self.options, pid=None)
         self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running")
 
         self.state_change_events.append(('consul', ProcessStates.RUNNING))
         self.state_change_events.append(('slurmd', ProcessStates.RUNNING))
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
         with LogCapturePrintable() as log_capture:
             self.monitor_run_and_listen_until_no_more_events()
             self.assertLogContains(log_capture,
@@ -221,8 +230,7 @@ class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
         self.assertEqual(self.processes_started, procs)
         self.assertStateProcsRunning(procs)
 
-    @mock.patch('supervisor.childutils.getRPCInterface')
-    def test_start_service_on_already_running_service_force_error(self, mock_get_rpc_interface):
+    def test_start_service_on_already_running_service_force_error(self):
         """
         Test what happens if supervisord throws an Faults.ALREADY_STARTED error
         """
@@ -233,7 +241,7 @@ class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
         self.add_test_service('consul', self.options, pid=None)
         self.add_test_service('slurmd', self.options, pid=True, dependent_startup_wait_for="consul:running")
 
-        self.setup_supervisord(mock_get_rpc_interface)
+        self.setup_eventlistener()
 
         # mock these two functions to circumvent the tests that should prevent starting an already running process
         def is_done(self, name):

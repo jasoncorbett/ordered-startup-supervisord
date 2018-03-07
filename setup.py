@@ -47,7 +47,7 @@ setup(
     install_requires=open('requirements.txt').read().split("\n"),
     author=__author__,
     url="https://github.com/bendikro/supervisord-dependent-startup",
-    tests_require=['supervisor', 'mock', 'pytest', 'testfixtures', 'jinja2', 'toposort'],
+    tests_require=['supervisor', 'mock', 'pytest', 'testfixtures', 'jinja2', 'toposort', 'parameterized'],
     cmdclass={'test': PyTest},
     test_suite='supervisord_dependent_startup.tests',
     entry_points={
