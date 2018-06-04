@@ -270,3 +270,16 @@ class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
         procs = ['consul', 'slurmd']
         self.assertEqual(self.processes_started, procs)
         self.assertStateProcsRunning(procs)
+
+    def test_process_not_started_after_reaching_fatal_state(self):
+        self.state_change_events.append(('consul', ProcessStates.BACKOFF))
+        self.state_change_events.append(('consul', ProcessStates.FATAL))
+        self.add_test_service('consul', self.options)
+
+        self.setup_eventlistener()
+        with LogCapturePrintable() as log_capture:
+            self.monitor_run_and_listen_until_no_more_events()
+
+        log_starting = log_capture.match_regex("Starting service:.+", level="INFO")
+        self.assertEqual(1, len(log_starting))
+        self.assertEqual("Starting service: consul (State: STOPPED)", log_starting[0].getMessage())

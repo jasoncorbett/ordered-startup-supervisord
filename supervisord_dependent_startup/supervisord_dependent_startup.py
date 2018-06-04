@@ -203,6 +203,7 @@ class ServiceOptions(object):
 
     def _parse_wait_for(self, section_name, wait_for):
         for dep in wait_for.split(' '):
+            # By default, depend on the process being in RUNNING state
             dep_states = ["RUNNING"]
             depsplit = dep.split(':')
             dep_service = depsplit[0]
@@ -296,8 +297,18 @@ class Service(object):
                     log.warn("Disable handling service '%s'" % (self.name))
                     self.options.opts['dependent_startup'] = False
 
-    def has_reached_state(self, state):
-        return state in self.states_reached
+    def has_reached_states(self, states):
+        """
+        Args:
+            states (list): List of states
+
+        Returns: True of one of the states have been reached, else False
+
+        """
+        for state in states:
+            if state in self.states_reached:
+                return True
+        return False
 
     @property
     def dependent_startup(self):
@@ -327,7 +338,7 @@ class Service(object):
 
     def depends_on_diff(self, other):
         """
-        Return set of dependies in self that other does not have
+        Return set of dependencies in self that other does not have
         """
         return set(self.options.wait_for_services.keys()).difference(
             set(other.options.wait_for_services.keys()))
@@ -363,7 +374,7 @@ class ProcessHandler(object):
 
     def is_startable(self, name):
         state = self.get_service_state(name)
-        return not process_states.is_running(state)
+        return not (process_states.is_running(state) or state in ['FATAL'])
 
     def is_done(self, name):
         self.update_proc_info_service(name)
@@ -451,7 +462,7 @@ class ServicesHandler(ProcessHandler):
         for dep_service in service.options.wait_for_services:
             satisifed = False
             for required_state in service.options.wait_for_services[dep_service]:
-                if self._services[dep_service].has_reached_state(required_state):
+                if self._services[dep_service].has_reached_states([required_state]):
                     satisifed = True
 
             if not satisifed:
@@ -467,7 +478,7 @@ class ServicesHandler(ProcessHandler):
         return self._services.values()
 
     def is_service_done(self, name):
-        return self._services[name].has_reached_state('RUNNING')
+        return self._services[name].has_reached_states(['RUNNING', 'FATAL'])
 
     def update_proc_info_all(self, print_services_list=False):
         super(ServicesHandler, self).update_proc_info_all()

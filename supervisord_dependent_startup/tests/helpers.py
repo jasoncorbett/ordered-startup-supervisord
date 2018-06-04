@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 
-from testfixtures import LogCapture
+from testfixtures import LogCapture, StringComparison
 
 from . import utils
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(utils.plugin_tests_logger_name)
 
 class LogCapturePrintable(LogCapture):
 
-    list_fmt = "[{index}] {name}  {filename}:{lineno:<4} [{levelname:7}]  {getMessage}\n"
+    list_fmt = "[{index:{index_width}}] {name}  {filename}:{lineno:<4} [{levelname:7}]  {getMessage}\n"
 
     def __init__(self, **args):
         # Set names to capture only the plugin logger
@@ -37,8 +37,21 @@ class LogCapturePrintable(LogCapture):
             record = self.records[i]
             params = {a: v for a, v in self._row_attrs(record, self.list_attributes)}
             params['index'] = i
+            params['index_width'] = len(str(len(self.records)))
             ret += self.list_fmt.format(**params)
         return ret
+
+    def match_regex(self, regex_pattern, name=None, level=None):
+        matches = []
+        for r in self.records:
+            if name and r.name != name:
+                continue
+            if level and r.levelname != level:
+                continue
+            if r.getMessage() != StringComparison(regex_pattern):
+                continue
+            matches.append(r)
+        return matches
 
 
 class TempDir(object):

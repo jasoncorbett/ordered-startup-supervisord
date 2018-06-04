@@ -315,7 +315,8 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         else:
             return getProcessStateDescription(state)
 
-    def assertLogContains(self, capture, expected):  # noqa: N802 (lowercase)
+    def assertLogContains(self, capture, expected, count=None):  # noqa: N802 (lowercase)
+        found = 0
         for e in capture.records:
             if e.name != expected[0]:
                 continue
@@ -323,9 +324,17 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
                 continue
             if e.getMessage() != expected[2]:
                 continue
+            found += 1
+
+        if count is None or found == count:
             return
+
         logger.error("Captured log statements:\n%s", capture)
-        self.fail("Log message '%s' not found" % (str(expected)))
+        if count and found != count:
+            msg = "Log message '%s' occured %d times. Expected %d" % (str(expected), found, count)
+        else:
+            msg = "Log message '%s' not found" % (str(expected))
+        self.fail(msg)
 
     def assertStateProc(self, name, state):  # noqa: N802 (lowercase)
         proc_info = self.rpc.getProcessInfo(name)
@@ -535,7 +544,7 @@ class WithEventListenerProcessTestsBase(DependentStartupTestsBase):
             process, state = self.state_change_events.pop(0)
             if state == self.processes[process].state:
                 cprint("STATE ERROR - Process '%s' already is in state %s" %
-                       (process, self.getProcessStateDescription(state=state)), 'red')
+                       (process, self.getProcessStateDescription(state=state)), color='red')
 
             # print("LOOP %2d change State %s: %s -> %s" %
             #       (count, process, self.getProcessStateDescription(process=process),

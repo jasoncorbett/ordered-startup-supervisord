@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.2.0) - _2018-06-04_
+[Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.1.0...v1.2.0)
+
+### Bug fixes
+- Do not attempt to start a process that has reached the FATAL state
+
+
 ## [1.1.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.1.0) - _2018-03-07_
 [Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.0.0...v1.1.0)
 
