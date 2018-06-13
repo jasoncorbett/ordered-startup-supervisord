@@ -25,7 +25,7 @@ supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 serverurl=unix:///tmp/tmp_home/tmp/supervisor.sock ; use a unix:// URL  for a unix socket
 
 [eventlistener:dependentstartup]
-command=python2 /path/to/supervisord_dependent_startup/supervisord_dependent_startup.py -c /tmp/tmp_home/etc/supervisor.conf
+command=python2 /path/to/supervisord_dependent_startup/supervisord_dependent_startup.py -c /tmp/tmp_home/etc/supervisord.conf
 stderr_logfile=/tmp/tmp_home/supervisord_logs/%(program_name)s-err.log
 autostart=true
 events=PROCESS_STATE
@@ -34,7 +34,7 @@ events=PROCESS_STATE
 files = /tmp/tmp_home/etc/supervisord.d/*.ini
 ```
 
-Next we will look at the jobs in the **supervisord.d** directory like **supervisord.d/ping.conf**::
+Next we will look at the jobs in the **supervisord.d** directory like **supervisord.d/ping.ini**::
 
 ```INI
 [program:ping]
@@ -45,7 +45,7 @@ startsecs=0
 dependent_startup=true
 ```
 
-**supervisord.d/ping2.conf**::
+**supervisord.d/ping2.ini**::
 
 ```INI
 [program:ping2]
@@ -57,7 +57,7 @@ dependent_startup=true
 dependent_startup_wait_for=sleep:running
 ```
 
-**supervisord.d/ping3.conf**::
+**supervisord.d/ping3.ini**::
 
 ```INI
 [program:ping3]
@@ -69,7 +69,7 @@ dependent_startup=true
 dependent_startup_wait_for=ping2:exited
 ```
 
-**supervisord.d/sleep.conf**::
+**supervisord.d/sleep.ini**::
 
 ```INI
 [program:sleep]
@@ -86,7 +86,7 @@ Notice how all of the *program:* sections have autostart=false.  Finally let's l
 supervisord:
 
 ```Shell
-$ supervisord  -c /tmp/tmp_home/etc/supervisor.conf -n
+$ supervisord  -c /tmp/tmp_home/etc/supervisord.conf -n
 2018-03-02 05:20:22,975 INFO Included extra file "/tmp/tmp_home/etc/supervisord.d/ping.ini" during parsing
 2018-03-02 05:20:22,975 INFO Included extra file "/tmp/tmp_home/etc/supervisord.d/ping2.ini" during parsing
 2018-03-02 05:20:22,975 INFO Included extra file "/tmp/tmp_home/etc/supervisord.d/ping3.ini" during parsing
