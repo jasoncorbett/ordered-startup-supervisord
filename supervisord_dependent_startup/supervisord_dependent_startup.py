@@ -635,7 +635,7 @@ class DependentStartup(object):
                     self.services_handler.start_service(service.name, wait=False)
 
     def _listen(self):
-        while 1:
+        while not self.startup_done:
             headers, payload = childutils.listener.wait(self.stdin, self.stdout)
             self.handle_event(headers, payload)
             childutils.listener.ok(self.stdout)

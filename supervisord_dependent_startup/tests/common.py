@@ -466,11 +466,15 @@ class DependentStartupTestsBase(MockRPCInterfaceTestsBase):
 
     def monitor_run_and_listen_until_no_more_events(self):
         self.monitor.run()
-        with self.assertRaises(UnitTestException):
+        try:
             count = 0
             for l in self.monitor._listen():
                 count += 1
                 self.monitor_run_and_listen_action(count)
+        except UnitTestException:
+            self.assertFalse(self.monitor.startup_done)
+        else:
+            self.assertTrue(self.monitor.startup_done)
 
 
 class DefaultTestRPCInterface(SupervisorNamespaceRPCInterface):
