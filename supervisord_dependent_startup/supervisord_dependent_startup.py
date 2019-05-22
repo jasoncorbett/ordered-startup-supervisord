@@ -729,7 +729,7 @@ def main():
 def run():
     exit_code = 0
     try:
-        exit_code = main()
+        main()
     except:  # noqa: E722
         log.error("Error occured:", exc_info=sys.exc_info())
         exit_code = 3

@@ -27,8 +27,13 @@ serverurl=unix:///tmp/tmp_home/tmp/supervisor.sock ; use a unix:// URL  for a un
 [eventlistener:dependentstartup]
 command=python3 /path/to/supervisord_dependent_startup/supervisord_dependent_startup.py -c /tmp/tmp_home/etc/supervisord.conf
 stderr_logfile=/tmp/tmp_home/supervisord_logs/%(program_name)s-err.log
-autostart=true
 events=PROCESS_STATE
+autostart=true
+; The following settings are necessary to ensure the supervisord_dependent_startup
+; process exits with EXITED when successfull, and FATAL when an error occured
+autorestart=unexpected
+startretries=0
+exitcodes=0,3
 
 [include]
 files = /tmp/tmp_home/etc/supervisord.d/*.ini

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.3.1) - _2019-05-22_
+[Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.3.0...v1.3.1)
+
+### Added
+- Exit the dependentstartup eventlistener process after all processes have been handled
+
+
 ## [1.3.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.3.0) - _2019-05-22_
 [Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.2.0...v1.3.0)
 

@@ -46,6 +46,9 @@ Configuration requires several things. First you need to configure
 [eventlistener:dependentstartup]
 command=python -m supervisord_dependent_startup
 autostart=true
+autorestart=unexpected
+startretries=0
+exitcodes=0,3
 events=PROCESS_STATE
 ```
 
