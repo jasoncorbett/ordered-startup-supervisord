@@ -81,7 +81,7 @@ class SupervisorProcessStates(states.ProcessStates):
                 continue
             val = getattr(self.__class__, state)
             if type(val) != int:
-                log.warn("Process state value for '%s' is not an int but '%s': %s" % (state, type(val), val))
+                log.warning("Process state value for '%s' is not an int but '%s': %s" % (state, type(val), val))
             states[state] = val
         self._states = states
 
@@ -154,7 +154,7 @@ class ConfigParser(UnhosedConfigParser):
                 value = type_func(value)
             return value
         except ValueError as err:
-            log.warn("Error when parsing section '%s' field: %s: %s", section, option, err)
+            log.warning("Error when parsing section '%s' field: %s: %s", section, option, err)
             return default
 
 
@@ -211,8 +211,8 @@ class ServiceOptions(object):
                 dep_states = [state.upper() for state in depsplit[1].split(',')]
                 for state in list(dep_states):
                     if state not in self.valid_wait_on_states:
-                        log.warn("Ignoring invalid state '%s' in '%s' for '%s'" %
-                                 (state, self.wait_for_opts_string, section_name))
+                        log.warning("Ignoring invalid state '%s' in '%s' for '%s'" %
+                                    (state, self.wait_for_opts_string, section_name))
                         dep_states.remove(state)
             self.wait_for_services[dep_service] = dep_states
 
@@ -287,14 +287,14 @@ class Service(object):
                              "autostart is currently %s" %
                              (self.name, self.options.dependent_startup,
                               self.options.opts.get('autostart', 'not set')))
-                log.warn("Error when reading config '%s': %s" %
-                         (parser.section_to_file[section_name], error_msg))
+                log.warning("Error when reading config '%s': %s" %
+                            (parser.section_to_file[section_name], error_msg))
 
             if error_msg:
                 if self.services_handler.args.error_action == 'exit':
                     raise DependentStartupError(error_msg)
                 elif self.services_handler.args.error_action in ['skip', 'ignore']:
-                    log.warn("Disable handling service '%s'" % (self.name))
+                    log.warning("Disable handling service '%s'" % (self.name))
                     self.options.opts['dependent_startup'] = False
 
     def has_reached_states(self, states):
@@ -391,7 +391,7 @@ class ProcessHandler(object):
         try:
             self.rpc.supervisor.startProcess(name, wait)
         except Fault as err:
-            log.warn("Error when starting service '%s': %s" % (name, err))
+            log.warning("Error when starting service '%s': %s" % (name, err))
             return False
 
         return True
@@ -432,12 +432,12 @@ class ServicesHandler(ProcessHandler):
             for dep in deps:
                 if dep not in self._services:
                     msg = "Service '%s' depends on unknown service '%s'" % (sname, dep)
-                    log.warn(msg)
+                    log.warning(msg)
                     if self.args.error_action == 'exit':
                         raise DependentStartupError(msg)
                     else:
                         # Must remove the dependency
-                        log.warn("Removing dependency '%s' from service %s", dep, sname)
+                        log.warning("Removing dependency '%s' from service %s", dep, sname)
                         del v.options.wait_for_services[dep]
 
     def get_sorted_services_list(self):
@@ -716,17 +716,17 @@ def main():
         config_file = search_for_config_file(search_paths, args.config_filename)
 
     if config_file is None:
-        log.warn("Unable to find a config file")
+        log.warning("Unable to find a config file")
         return 4
     if not os.path.exists(config_file):
-        log.warn("Config path {} does not exist!".format(config_file))
+        log.warning("Config path {} does not exist!".format(config_file))
         return 2
 
     event_listener = DependentStartup(args, config_file)
     event_listener.run_and_listen()
 
 
-if __name__ == '__main__':
+def run():
     exit_code = 0
     try:
         exit_code = main()
@@ -734,3 +734,7 @@ if __name__ == '__main__':
         log.error("Error occured:", exc_info=sys.exc_info())
         exit_code = 3
     sys.exit(exit_code)
+
+
+if __name__ == '__main__':
+    run()

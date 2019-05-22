@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
-__author__ = 'Bendik Rønning Opstad'
-
 import sys
 
 from setuptools import find_packages, setup
@@ -32,20 +29,28 @@ class PyTest(TestCommand):
 
 setup(
     name="supervisord-dependent-startup",
-    description=("An event listener for supervisord that will start up items in order upon certain states. "
+    description=("A plugin for Supervisor that allows starting up services after "
+                 "dependent services have reached specific states. "
                  "Based on ordered-startup-supervisord by Jason Corbett"),
+    long_description=open('README.md').read(),
+    long_description_content_type="text/markdown",
     version=__version__,
+    author='Bendik Rønning Opstad',
+    author_email='bro.devel@gmail.com',
     license="Apache Software License v2",
     classifiers=[
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 2.7",
+        'Programming Language :: Python :: 3.4',
+        'Programming Language :: Python :: 3.5',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
         "Topic :: System :: Boot :: Init",
         "Environment :: Plugins"
     ],
-    long_description=open('README.md').read(),
     packages=find_packages(),
+    include_package_data=True,
     install_requires=open('requirements.txt').read().split("\n"),
-    author=__author__,
     url="https://github.com/bendikro/supervisord-dependent-startup",
     tests_require=['supervisor', 'mock', 'pytest', 'testfixtures', 'jinja2', 'toposort', 'parameterized'],
     cmdclass={'test': PyTest},

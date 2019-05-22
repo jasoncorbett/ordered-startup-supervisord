@@ -25,7 +25,7 @@ supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 serverurl=unix:///tmp/tmp_home/tmp/supervisor.sock ; use a unix:// URL  for a unix socket
 
 [eventlistener:dependentstartup]
-command=python2 /path/to/supervisord_dependent_startup/supervisord_dependent_startup.py -c /tmp/tmp_home/etc/supervisord.conf
+command=python3 /path/to/supervisord_dependent_startup/supervisord_dependent_startup.py -c /tmp/tmp_home/etc/supervisord.conf
 stderr_logfile=/tmp/tmp_home/supervisord_logs/%(program_name)s-err.log
 autostart=true
 events=PROCESS_STATE

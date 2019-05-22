@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.3.0) - _2019-05-22_
+[Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.2.0...v1.3.0)
+
+### Added
+- Support for supervisor version 4 which now runs on python 3
+- Add support for running as a module: `python3 -m supervisord_dependent_startup`
+- Add support for installing source distribution with pip and upload to pypi
+
+
 ## [1.2.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.2.0) - _2018-06-04_
 [Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.1.0...v1.2.0)
 

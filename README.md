@@ -2,7 +2,7 @@
 
 `supervisord-dependent-startup` is a plugin for
 [Supervisor](http://supervisord.org) that allows starting up services after
-other services have reached specific states. This plugin is based on
+dependent services have reached specific states. This plugin is based on
 [ordered-startup-supervisord](https://github.com/jasoncorbett/ordered-startup-supervisord/)
 by [Jason Corbett](https://github.com/jasoncorbett).
 
@@ -27,6 +27,16 @@ subprocess gets to the configured state before starting dependent services.
 The plugin does not start groups. It can start services that are part of a
 group, but it won't directly start a group.
 
+## Installing
+
+```
+# From pypi
+pip install supervisord-dependent-startup
+
+# From github:
+pip install -e git+https://github.com/bendikro/supervisord-dependent-startup.git#egg=supervisord-dependent-startup
+```
+
 ## Configuration
 
 Configuration requires several things. First you need to configure
@@ -34,11 +44,10 @@ Configuration requires several things. First you need to configure
 
 ```INI
 [eventlistener:dependentstartup]
-command=/path/to/supervisord-dependent-startup
+command=python -m supervisord_dependent_startup
 autostart=true
 events=PROCESS_STATE
 ```
-
 
 ### Service configuration options
 

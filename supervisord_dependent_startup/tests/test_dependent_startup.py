@@ -118,7 +118,7 @@ class ConfigEnvVariablesExpansionSuccessTests(common.DependentStartupWithoutEven
             else:
                 service_args['dependent_startup'] = 'true'
 
-    @parameterized.expand(expansion_success_config_option_fields, testcase_func_name=unit_test_name_func)
+    @parameterized.expand(expansion_success_config_option_fields, name_func=unit_test_name_func)
     @mock.patch.dict(os.environ, {}, clear=True)
     def test_with_env_var_expansion(self, field_conf):
         field = field_conf['field']
@@ -173,7 +173,7 @@ class ConfigWaitForEnvVariablesExpansionSuccessTests(common.DependentStartupWith
             else:
                 service_args['dependent_startup'] = 'true'
 
-    @parameterized.expand(expansion_success_config_options_wait_on, testcase_func_name=unit_test_name_func)
+    @parameterized.expand(expansion_success_config_options_wait_on, name_func=unit_test_name_func)
     @mock.patch.dict(os.environ, {}, clear=True)
     def test_wait_for_with_env_var_expansion(self, field_conf):
         field = field_conf['field']

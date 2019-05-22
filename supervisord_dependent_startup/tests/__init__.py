@@ -26,8 +26,8 @@ log_format = os.environ.get('TESTS_LOG_FORMAT', default_log_format)
 
 setup_tests_logging(env_plugin_log_level, env_tests_log_level, log_format)
 
-validBooleans = {'true': True, 'True': True, 'TRUE': True, 't': True, '1': True}
-cleanup_tmp_dir = os.environ.get('CLEANUP_TESTS', "True") in validBooleans
+valid_booleans = {'true': True, 'True': True, 'TRUE': True, 't': True, '1': True}
+cleanup_tmp_dir = os.environ.get('CLEANUP_TESTS', "True") in valid_booleans
 
 # Name of directory to store supervisor config files.  If unset, a random value is used
 test_tmp_dir = os.environ.get('TEST_TMP_DIR', None)

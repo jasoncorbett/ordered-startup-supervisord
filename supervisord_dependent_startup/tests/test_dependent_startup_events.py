@@ -44,7 +44,14 @@ class DependentStartupEventTestsBase(common.WithEventListenerProcessTestsBase):
             event_type = event.__class__
             serial = event.serial
             pool_serial = event.pool_serials[dependent_startup_service_name]
-            envelope = eventlistener._eventEnvelope(event_type, serial, pool_serial, str(event))
+
+            try:
+                payload = event.payload()
+            except AttributeError:
+                # supervisor version <= 3.4.0
+                payload = str(event)
+
+            envelope = eventlistener._eventEnvelope(event_type, serial, pool_serial, payload)
             logger.debug("Writing event envelope to stdin: %s" % envelope)
             self.stdin_wrapper.write(envelope)
             eventlistener.event_buffer.pop(0)
@@ -148,9 +155,12 @@ class DependentStartupEventSuccessTests(DependentStartupEventTestsBase):
         with self.assertRaises(DependentStartupError) as context:
             self.setup_eventlistener()
             self.monitor_run_and_listen_until_no_more_events()
-        self.assertEqual(str(context.exception.message),
-                         "Circular dependencies exist among these items: "
-                         "{'consul':set(['consul3']), 'consul2':set(['consul']), 'consul3':set(['consul2'])}")
+
+        expected = {'consul': set(['consul3']), 'consul2': set(['consul']), 'consul3': set(['consul2'])}
+        expected_str = 'Circular dependencies exist among these items: {{{}}}'.format(
+            ', '.join('{!r}:{!r}'.format(key, value) for key, value in sorted(expected.items())))
+
+        self.assertEqual(expected_str, str(context.exception))
 
     def test_start_service_check_order(self):
         self.add_test_service('consul', self.options)
@@ -234,6 +244,7 @@ class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
         """
         Test what happens if supervisord throws an Faults.ALREADY_STARTED error
         """
+        print()
         self.state_change_events.append(('consul', ProcessStates.RUNNING))
         self.state_change_events.append(('slurmd', ProcessStates.STARTING))
         self.state_change_events.append(('slurmd', ProcessStates.RUNNING))

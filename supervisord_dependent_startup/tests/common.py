@@ -3,7 +3,6 @@ from __future__ import print_function
 import logging
 import os
 import unittest
-import xmlrpclib
 
 import supervisor.events
 from supervisor.options import (EventListenerConfig, EventListenerPoolConfig, ProcessConfig,
@@ -14,6 +13,11 @@ from supervisor.states import getProcessStateDescription
 from supervisor.supervisord import Supervisor
 from supervisor.tests.base import DummyOptions, DummyProcess
 from supervisor.xmlrpc import RPCError
+
+try:
+    from xmlrpclib import Fault as XmlrpcFault
+except ImportError:
+    from xmlrpc.client import Fault as XmlrpcFault
 
 try:
     from unittest import mock
@@ -398,22 +402,27 @@ class StdinIOStringWrapper(object):
         self.buffer = StringIO()
 
     def __len__(self):
-        return self.buffer.len - self.buffer.pos
+        return self._buffer_len() - self.buffer.tell()
+
+    def _buffer_len(self):
+        cur_pos = self.buffer.tell()
+        self.buffer.seek(0, os.SEEK_END)
+        length = self.buffer.tell()
+        self.buffer.seek(cur_pos)
+        return length
 
     def readline(self):
-        if self.buffer.len == self.buffer.pos:
+        if self._buffer_len() == self.buffer.tell():
             raise UnitTestException("No more events")
 
-        data = self.buffer.readline()
-        return data
+        return self.buffer.readline()
 
     def read(self, n=-1):
-        data = self.buffer.read(n)
-        return data
+        return self.buffer.read(n)
 
     def write(self, buf):
         logger.debug(colored("StdinIOStringWrapper.write() EVENT: '%s'" % buf, 'red'))
-        pos = self.buffer.pos
+        pos = self.buffer.tell()
         self.buffer.write(buf)
         self.buffer.seek(pos)
 
@@ -474,7 +483,7 @@ class DefaultTestRPCInterface(SupervisorNamespaceRPCInterface):
         try:
             SupervisorNamespaceRPCInterface.startProcess(self, name, wait=wait)
         except RPCError as err:
-            raise xmlrpclib.Fault(err.code, err.text)
+            raise XmlrpcFault(err.code, err.text)
 
 
 class DependentStartupWithoutEventListenerTestsBase(DependentStartupTestsBase):
