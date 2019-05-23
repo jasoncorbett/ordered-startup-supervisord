@@ -222,7 +222,7 @@ class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
 
         self.rpcinterface_class = TestRPCInterface
 
-    def test_start_service_on_already_running_service(self):
+    def test_start_services(self):
         self.add_test_service('consul', self.options, pid=None)
         self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running")
 
@@ -244,7 +244,6 @@ class DependentStartupEventErrorTests(DependentStartupEventTestsBase):
         """
         Test what happens if supervisord throws an Faults.ALREADY_STARTED error
         """
-        print()
         self.state_change_events.append(('consul', ProcessStates.RUNNING))
         self.state_change_events.append(('slurmd', ProcessStates.STARTING))
         self.state_change_events.append(('slurmd', ProcessStates.RUNNING))

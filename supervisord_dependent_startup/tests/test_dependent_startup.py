@@ -6,7 +6,7 @@ import os
 from parameterized import param, parameterized
 
 from . import DependentStartupError, ServiceOptions, common, config_utils, get_all_configs
-from .common import mock
+from .common import StdinManualEventsWrapper, mock
 from .helpers import LogCapturePrintable
 from .utils import cprint, plugin_logger_name, plugin_tests_logger_name  # noqa: F401
 
@@ -295,3 +295,37 @@ class ConfigLoadFailureTests(common.DependentStartupWithoutEventListenerTestsBas
 
         service = self.monitor.services_handler._services[service_name]
         self.assertEqual(0, len(service.options.wait_for_services))
+
+
+class DependentStartupEventParseTests(common.DependentStartupWithoutEventListenerTestsBase):
+
+    def setUp(self):
+        super(DependentStartupEventParseTests, self).setUp()
+        # May not be needed
+        os.environ['SUPERVISOR_SERVER_URL'] = "unix:///var/tmp/supervisor.sock"
+        test_instance = self
+
+        class StdinEvents(StdinManualEventsWrapper):
+
+            def get_process_event_line(self, index):
+                line = test_instance.eventline_fmt % self.events[index]
+                return line
+
+        self.stdin_wrapper = StdinEvents()
+
+    def test_event_data_multiline(self):
+        self.eventline_fmt = ("processname:%(processname)s groupname:%(groupname)s "
+                              "from_state:%(from_state)s pid:%(pid)s "
+                              "channel:stderr\n: No such file or directory")
+        self.write_supervisord_config()
+        self.add_test_service('consul', self.options)
+        self.setup_eventlistener()
+        self.monitor_run_and_listen_until_no_more_events()
+
+    def test_event_data_singe_line(self):
+        self.eventline_fmt = ("processname:%(processname)s groupname:%(groupname)s "
+                              "from_state:%(from_state)s pid:%(pid)s")
+        self.write_supervisord_config()
+        self.add_test_service('consul', self.options)
+        self.setup_eventlistener()
+        self.monitor_run_and_listen_until_no_more_events()

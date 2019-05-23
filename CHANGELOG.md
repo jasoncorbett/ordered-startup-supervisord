@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.3.2) - _2019-05-23_
+[Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.3.1...v1.3.2)
+
+### Bug fixes
+- Fix crash caused by bug when parsing events data
+
+
 ## [1.3.1](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.3.1) - _2019-05-22_
 [Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.3.0...v1.3.1)
 

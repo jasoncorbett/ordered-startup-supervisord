@@ -552,13 +552,19 @@ class DependentStartup(object):
         self.stderr.flush()
 
     def get_event_str(self, headers, payload, short=True):
-        pheaders = childutils.get_headers(payload)
-        pheaders.update(headers)
+        payload_headers = self.parse_event_headers(payload)
+        payload_headers.update(headers)
         if short:
-            new_state = process_states.process_state_event_to_string(pheaders['eventname'])
+            new_state = process_states.process_state_event_to_string(payload_headers['eventname'])
             return ("Service %s went from %s to %s" %
-                    (pheaders['processname'], pheaders['from_state'], new_state))
+                    (payload_headers.get('processname', None),
+                     payload_headers.get('from_state', None), new_state))
         return "headers: %s, payload: %s" % (headers, payload)
+
+    def parse_event_headers(self, payload):
+        header_line = payload.split('\n', 1)[0]
+        payload_headers = childutils.get_headers(header_line)
+        return payload_headers
 
     def handle_event(self, headers, payload):
         event_str = self.get_event_str(headers, payload)
@@ -570,12 +576,12 @@ class DependentStartup(object):
         log.info("New event: %s" % event_str)
 
         if headers['eventname'].startswith('PROCESS_STATE') and not self.startup_done:
-            pheaders = childutils.get_headers(payload)
+            payload_headers = self.parse_event_headers(payload)
             state = process_states.process_state_event_to_string(headers['eventname'])
-            event_process = pheaders['processname']
+            event_process = payload_headers['processname']
             log.debug("Event from service '%s' (%s)" % (event_process, state))
             log.debug("headers = {}".format(repr(headers)))
-            log.debug("payload = {}".format(repr(pheaders)))
+            log.debug("payload = {}".format(repr(payload_headers)))
 
             self.services_handler.update_state_event(event_process, state)
             self.services_handler.update_proc_info_all()
