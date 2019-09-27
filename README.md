@@ -40,7 +40,7 @@ pip install -e git+https://github.com/bendikro/supervisord-dependent-startup.git
 ## Configuration
 
 Configuration requires several things. First you need to configure
-`supervisord-dependent-startup` in `supervisor.conf` as an event listener.
+`supervisord-dependent-startup` as an event listener by adding the following to `supervisor.conf`:
 
 ```INI
 [eventlistener:dependentstartup]
@@ -51,6 +51,38 @@ startretries=0
 exitcodes=0,3
 events=PROCESS_STATE
 ```
+
+A working `/etc/supervisor.conf` can look like this:
+```INI
+[unix_http_server]
+file=/tmp/supervisor.sock ; (the path to the socket file)
+
+[supervisord]
+logfile=/tmp/supervisord.log
+loglevel=info
+pidfile=/var/run/supervisord.pid
+nodaemon=false
+minfds=1024
+minprocs=200
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix:///tmp/supervisor.sock
+
+[eventlistener:dependentstartup]
+command=python -m supervisord_dependent_startup
+autostart=true
+autorestart=unexpected
+startretries=0
+exitcodes=0,3
+events=PROCESS_STATE
+
+[include]
+files = /etc/supervisord.d/*.ini
+```
+
 
 ### Service configuration options
 

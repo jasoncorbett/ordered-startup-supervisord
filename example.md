@@ -4,7 +4,9 @@ The following is an example of a supervisor configuration that starts one item
 after the next in the order given by the depdency options. The order will be
 `ping`, `sleep`, `ping2`, and `ping3`.
 
-First **supervisord.conf**::
+### supervisord.conf
+
+Write the following to `/tmp/tmp_home/etc/supervisord.conf`
 
 ```INI
 [unix_http_server]
@@ -39,7 +41,13 @@ exitcodes=0,3
 files = /tmp/tmp_home/etc/supervisord.d/*.ini
 ```
 
-Next we will look at the jobs in the **supervisord.d** directory like **supervisord.d/ping.ini**::
+### service configuration files
+
+Next we will look at the jobs in the **supervisord.d** directory like **supervisord.d/ping.ini**:
+
+#### ping.ini
+
+Write to `/tmp/tmp_home/etc/supervisord.d/ping.ini`
 
 ```INI
 [program:ping]
@@ -50,7 +58,9 @@ startsecs=0
 dependent_startup=true
 ```
 
-**supervisord.d/ping2.ini**::
+#### ping2.ini
+
+Write to `/tmp/tmp_home/etc/supervisord.d/ping2.ini`
 
 ```INI
 [program:ping2]
@@ -62,7 +72,9 @@ dependent_startup=true
 dependent_startup_wait_for=sleep:running
 ```
 
-**supervisord.d/ping3.ini**::
+#### ping3.ini
+
+Write to `/tmp/tmp_home/etc/supervisord.d/ping3.ini`
 
 ```INI
 [program:ping3]
@@ -74,7 +86,9 @@ dependent_startup=true
 dependent_startup_wait_for=ping2:exited
 ```
 
-**supervisord.d/sleep.ini**::
+#### sleep.ini
+
+Write to `/tmp/tmp_home/etc/supervisord.d/sleep.ini`
 
 ```INI
 [program:sleep]
@@ -86,6 +100,8 @@ startsecs=5
 dependent_startup=true
 dependent_startup_wait_for=ping:exited
 ```
+
+## Ping example execution
 
 Notice how all of the *program:* sections have autostart=false.  Finally let's look at the output of running
 supervisord:
