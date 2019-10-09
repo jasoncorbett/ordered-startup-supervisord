@@ -7,20 +7,25 @@ import tempfile
 
 from testfixtures import LogCapture, StringComparison
 
-from . import utils
+from . import log_utils, utils
 
-logger = logging.getLogger(utils.plugin_tests_logger_name)
+logger = logging.getLogger(log_utils.plugin_tests_logger_name)
+
+
+log_capture_fmt = "[%(index_str)s] %(name)s %(filename)s:%(lineno)-4s [%(levelname)-7s]  %(message)s"
 
 
 class LogCapturePrintable(LogCapture):
 
-    list_fmt = "[{index:{index_width}}] {name}  {filename}:{lineno:<4} [{levelname:7}]  {getMessage}\n"
-
-    def __init__(self, **args):
+    def __init__(self, formatter=None, **args):
         # Set names to capture only the plugin logger
-        args['names'] = (utils.plugin_logger_name, )
+        args['names'] = (log_utils.plugin_logger_name, )
         super(LogCapturePrintable, self).__init__(**args)
-        self.list_attributes = ('name', 'levelname', 'getMessage', 'filename', 'lineno', 'msg')
+        self.formatter = formatter
+
+    def emit(self, record):
+        record.index = len(self.records)
+        super(LogCapturePrintable, self).emit(record)
 
     def _row_attrs(self, record, attributes):
         for a in attributes:
@@ -29,16 +34,25 @@ class LogCapturePrintable(LogCapture):
                 value = value()
             yield a, value
 
+    def __len__(self):
+        return len(self.records)
+
     def __str__(self):
         if not self.records:
             return 'No log statements captured for logs: %s' % (self.names)
         ret = ""
+        for r in self.format_records():
+            ret += "%s\n" % r
+        return ret
+
+    def format_records(self):
+        if not self.formatter:
+            self.formatter = logging.Formatter(fmt=log_capture_fmt)
+        ret = []
         for i, e in enumerate(self.actual()):
             record = self.records[i]
-            params = {a: v for a, v in self._row_attrs(record, self.list_attributes)}
-            params['index'] = i
-            params['index_width'] = len(str(len(self.records)))
-            ret += self.list_fmt.format(**params)
+            record.index_str = "%-{}d".format(len(str(len(self.records)))) % (record.index)
+            ret.append(self.formatter.format(record))
         return ret
 
     def match_regex(self, regex_pattern, name=None, level=None):
@@ -52,6 +66,28 @@ class LogCapturePrintable(LogCapture):
                 continue
             matches.append(r)
         return matches
+
+
+def get_log_capture_printable(formatter=None, fmt=None, colors=True, capture_fmt=True):
+    """
+    Args:
+        capture_fmt (bool): Use the default capture format. If False, get the format from the consol logger
+
+    """
+    if fmt is None and capture_fmt:
+        fmt = log_capture_fmt
+
+    if fmt is None and formatter is None:
+        root = logging.getLogger()
+        if not fmt:
+            for h in root.handlers:
+                if h.get_name() == log_utils.logging_console_handler_name:
+                    formatter = h.formatter
+                    break
+    if colors:
+        formatter = log_utils.ColorFormatter(formatter=formatter, fmt=fmt, colors=colors, update_fmt_for_colors=True)
+
+    return LogCapturePrintable(formatter=formatter)
 
 
 class TempDir(object):

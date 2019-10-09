@@ -1,2 +1,7 @@
 include README.md
+include example.md
+include CHANGELOG.md
+include LICENSE
+include tox.ini
 include requirements.txt
+include requirements-tests.txt

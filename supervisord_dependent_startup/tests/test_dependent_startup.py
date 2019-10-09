@@ -5,12 +5,13 @@ import os
 
 from parameterized import param, parameterized
 
-from . import DependentStartupError, ServiceOptions, common, config_utils, get_all_configs
-from .common import StdinManualEventsWrapper, mock
+from . import common, config_utils, DependentStartupError, get_all_configs, ServiceOptions
+from .common import mock, StdinManualEventsWrapper
 from .helpers import LogCapturePrintable
-from .utils import cprint, plugin_logger_name, plugin_tests_logger_name  # noqa: F401
+from .log_utils import plugin_logger_name, plugin_tests_logger_name  # noqa: F401
+from .utils import cprint  # noqa: F401
 
-logger = logging.getLogger(plugin_tests_logger_name)
+log = logging.getLogger(plugin_tests_logger_name)
 
 
 class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTestsBase):
@@ -22,10 +23,39 @@ class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTest
 
     def test_get_all_configs(self):
         self.write_supervisord_config()
-        service_conf = self.add_service_file("testservice")
+        service_conf, rendered = self.add_service_file("testservice")
         configs = get_all_configs(self.supervisor_conf)
         expected = [self.supervisor_conf, service_conf]
         self.assertEqual(expected, configs)
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_service_handler_is_service_done(self):
+        sname = 'consul'
+        self.write_supervisord_config()
+        self.add_test_service(sname, self.options)
+        self.add_test_service('slurmd', self.options, dependent_startup_wait_for="consul:running", priority=10)
+        self.add_test_service('slurmd2', self.options, dependent_startup_wait_for="consul:running slurmd:running")
+
+        self.setup_eventlistener()
+
+        self.monitor.run()
+        handler = self.monitor.services_handler
+        service = handler._services[sname]
+
+        self.assertEqual([('consul', 'STOPPED')], handler.get_service_states(service))
+        self.assertTrue(handler.is_startable(service))
+        self.assertFalse(handler.is_service_done(service))
+
+        self.monitor_listen_on_events(event_procs=['dependentstartup', 'dependentstartup'])
+        self.monitor_listen_on_events(event_procs=['consul'])
+
+        self.assertEqual([('consul', 'RUNNING')], handler.get_service_states(service))
+        self.assertFalse(handler.is_startable(service))
+        self.assertFalse(handler.is_service_done(service))
+        self.monitor_listen_on_events(event_procs=['consul'])
+        self.assertTrue(handler.is_service_done(service))
+
+        self.monitor_run_and_listen_until_no_more_events(run=False)
 
     def test_run_plugin(self):
         self.write_supervisord_config()
@@ -36,9 +66,9 @@ class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTest
         self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
         # self.print_procs()
-        procs = ['consul', 'slurmd', 'slurmd2']
-        self.assertEqual(self.processes_started, procs)
-        self.assertStateProcsRunning(procs)
+        expected_procs = ['consul', 'slurmd', 'slurmd2']
+        self.assertEqual(expected_procs, self.processes_started)
+        self.assertStateProcsRunning(expected_procs)
 
     def test_run_ping_example(self):
         self.write_supervisord_config()
@@ -81,6 +111,106 @@ class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTest
 
         self.setup_eventlistener()
         self.monitor_run_and_listen_until_no_more_events()
+
+
+class DependentStartupWithGroupsTests(common.DependentStartupWithoutEventListenerTestsBase):
+
+    def setUp(self):
+        super(DependentStartupWithGroupsTests, self).setUp()
+        # May not be needed
+        os.environ['SUPERVISOR_SERVER_URL'] = "unix:///var/tmp/supervisor.sock"
+
+    def test_basic_config(self):
+        self.write_supervisord_config()
+        consul_priority = 5
+        slurmd_priority = 10
+        slurmd3_priority = 15
+        self.add_test_service('consul', self.options, priority=consul_priority)
+
+        self.add_test_service('slurmd', self.options,
+                              priority=slurmd_priority,
+                              dependent_startup_wait_for="consul:running")
+        self.add_test_service('slurmd2', self.options,
+                              dependent_startup_inherit_priority=True,
+                              dependent_startup_wait_for="consul:running")
+        self.add_test_service('slurmd3', self.options,
+                              priority=slurmd3_priority,
+                              dependent_startup_inherit_priority=True,
+                              dependent_startup_wait_for="consul:running slurmd:running")
+
+        self.setup_eventlistener()
+        self.monitor_run_and_listen_until_no_more_events()
+
+        slurmd_service = self.monitor.services_handler._services['slurmd']
+        self.assertEqual('slurmd', slurmd_service.group)
+        self.assertEqual('slurmd', slurmd_service.group_and_procname)
+
+        expected_slurm_procs = ['slurmd']
+        self.assertEqual(expected_slurm_procs, list(slurmd_service.procs_state.keys()))
+
+        self.assertEqual(slurmd_priority, slurmd_service.priority)
+        self.assertEqual(slurmd_priority, slurmd_service.priority_effective)
+
+        self.assertTrue(slurmd_service.dependent_startup)
+
+        slurmd2_service = self.monitor.services_handler._services['slurmd2']
+        self.assertEqual(True, slurmd2_service.options.inherit_priority)
+        self.assertEqual(None, slurmd2_service.priority)
+        self.assertEqual(consul_priority, slurmd2_service.priority_effective)
+
+        slurmd3_service = self.monitor.services_handler._services['slurmd3']
+        self.assertEqual(True, slurmd3_service.options.inherit_priority)
+        self.assertEqual(slurmd3_priority, slurmd3_service.priority)
+        self.assertEqual(consul_priority, slurmd3_service.priority_effective)
+
+        expected_procs = ['consul', 'slurmd2', 'slurmd', 'slurmd3']
+        self.assertEqual(expected_procs, self.processes_started)
+        self.assertStateProcsRunning(expected_procs)
+
+    def test_config_with_numprocs(self):
+        self.write_supervisord_config()
+        self.add_test_service('consul', self.options)
+        self.add_test_service('slurmd', self.options,
+                              dependent_startup_wait_for="consul:running",
+                              numprocs=2,
+                              process_name="%(program_name)s_%(process_num)02d")
+
+        self.setup_eventlistener()
+        self.monitor_run_and_listen_until_no_more_events()
+        # self.print_procs()
+        slurmd_service = self.monitor.services_handler._services['slurmd']
+        self.assertEqual('slurmd', slurmd_service.name)
+        self.assertEqual('slurmd', slurmd_service.group)
+        self.assertEqual('slurmd', slurmd_service.group_and_procname)
+
+        expected_slurm_procs = ['slurmd_00', 'slurmd_01']
+        self.assertEqual(expected_slurm_procs, sorted(slurmd_service.procs_state.keys()))
+
+        expected_procs = ['consul', 'slurmd:slurmd_00', 'slurmd:slurmd_01']
+        self.assertEqual(expected_procs, sorted(self.processes_started))
+        self.assertStateProcsRunning(expected_procs)
+
+    def test_config_with_custom_process_name(self):
+        self.write_supervisord_config()
+        self.add_test_service('consul', self.options)
+        self.add_test_service('slurmd', self.options,
+                              dependent_startup_wait_for="consul:running",
+                              process_name="slurmd_custom_procname")
+
+        self.setup_eventlistener()
+        self.monitor_run_and_listen_until_no_more_events()
+        # self.print_procs()
+        slurmd_service = self.monitor.services_handler._services['slurmd']
+        self.assertEqual('slurmd', slurmd_service.name)
+        self.assertEqual('slurmd', slurmd_service.group)
+        self.assertEqual('slurmd:slurmd_custom_procname', slurmd_service.group_and_procname)
+
+        expected_slurm_procs = ['slurmd_custom_procname']
+        self.assertEqual(expected_slurm_procs, sorted(slurmd_service.procs_state.keys()))
+
+        expected_procs = ['consul', 'slurmd:slurmd_custom_procname']
+        self.assertEqual(expected_procs, sorted(self.processes_started))
+        self.assertStateProcsRunning(expected_procs)
 
 
 def unit_test_name_func(testcase_func, param_num, param):
@@ -198,30 +328,35 @@ class ConfigWaitForEnvVariablesExpansionSuccessTests(common.DependentStartupWith
 
 
 expansion_fail_config_option_fields = [
-    ('priority', 'ENV_PRIORITY'),
-    ('autostart', 'ENV_AUTOSTART'),
-    ('dependent_startup', 'ENV_DEPENDENT_STARTUP'),
-    ('dependent_startup_inherit_priority', 'ENV_DEPENDENT_STARTUP_INHERIT_PRIORITY'),
-    ('dependent_startup_wait_for', 'ENV_DEPENDENT_STARTUP_WAIT_FOR')]
+    ('priority', 'ENV_PRIORITY', 'group_name, here, host_node_name, program_name'),
+    ('autostart', 'ENV_AUTOSTART', 'group_name, here, host_node_name, program_name'),
+    ('dependent_startup', 'ENV_DEPENDENT_STARTUP', 'group_name, here, host_node_name, program_name'),
+    ('dependent_startup_inherit_priority', 'ENV_DEPENDENT_STARTUP_INHERIT_PRIORITY',
+     'group_name, here, host_node_name, program_name'),
+    ('dependent_startup_wait_for', 'ENV_DEPENDENT_STARTUP_WAIT_FOR', 'here')]
 
 
 @mock.patch.dict(os.environ, {'ONLY_VAR': ''}, clear=True)
 class ConfigEnvVariablesExpansionFailTests(common.DependentStartupWithoutEventListenerTestsBase):
 
     @parameterized.expand(expansion_fail_config_option_fields)
-    def test_with_no_env_var_available(self, field, env_var):
+    def test_with_no_env_var_available(self, field, env_var, available_names):
         self.write_supervisord_config()
         field_value = "%({})s".format(env_var)
-        self.add_service_file("service_with_env_var",
+        service_name = 'service_with_env_var'
+        self.add_service_file(service_name,
                               **{'dependent_startup': 'false', field: field_value})
 
         expected_log_msg = ("Error when parsing section "
-                            "'program:service_with_env_var' field: {field}: "
+                            "'program:{service_name}' field: {field}: "
                             "Format string '{field_value}' for 'program:service_with_env_var.{field}' "
                             "contains names ('{env_var}') "
-                            "which cannot be expanded. Available names: ENV_ONLY_VAR")
-        expected_log_msg = expected_log_msg.format(field=field, env_var=env_var,
-                                                   field_value=field_value)
+                            "which cannot be expanded. Available names: ENV_ONLY_VAR, {available_names}")
+
+        expected_log_msg = expected_log_msg.format(service_name=service_name,
+                                                   field=field, env_var=env_var,
+                                                   field_value=field_value,
+                                                   available_names=available_names)
 
         with LogCapturePrintable() as log_capture:
             self.setup_eventlistener()
@@ -229,11 +364,11 @@ class ConfigEnvVariablesExpansionFailTests(common.DependentStartupWithoutEventLi
                 log_capture,
                 (plugin_logger_name, 'WARNING', expected_log_msg))
 
-        service = self.monitor.services_handler._services['service_with_env_var']
+        service = self.monitor.services_handler._services[service_name]
 
         # When parsing fails, expect default value
         opts_attr = field.replace('dependent_startup_', '')
-        default_options = ServiceOptions()
+        default_options = ServiceOptions(service_name, service_name)
         self.assertEqual(getattr(default_options, opts_attr), getattr(service.options, opts_attr))
 
 
@@ -252,9 +387,8 @@ class ConfigLoadFailureTests(common.DependentStartupWithoutEventListenerTestsBas
     def test_that_loading_config_with_both_autostart_and_dependent_startup_true_fails_with_log(self):
         self.write_supervisord_config()
         service_name = "service_with_env_var"
-        service_conf = self.add_service_file(service_name,
-                                             **{'dependent_startup': 'true',
-                                                'autostart': 'true'})
+        service_conf, rendered = self.add_service_file(service_name,
+                                                       **{'dependent_startup': 'true', 'autostart': 'true'})
         expected_log_msg = ("Error when reading config '{service_conf}': Service '{service_name}' "
                             "config has dependent_startup set to True, which requires autostart "
                             "to be set explicitly to false. autostart is currently True")
@@ -301,7 +435,7 @@ class DependentStartupEventParseTests(common.DependentStartupWithoutEventListene
 
     def setUp(self):
         super(DependentStartupEventParseTests, self).setUp()
-        # May not be needed
+        # Not be needed
         os.environ['SUPERVISOR_SERVER_URL'] = "unix:///var/tmp/supervisor.sock"
         test_instance = self
 

@@ -1,0 +1,6 @@
+toposort>=1.5
+mock
+testfixtures
+jinja2
+pytest
+parameterized>=0.6.1

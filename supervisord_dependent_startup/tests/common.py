@@ -2,8 +2,17 @@ from __future__ import print_function
 
 import logging
 import os
+import signal
 import unittest
 
+try:
+    from StringIO import StringIO  # Needed for python 2
+except ImportError:
+    from io import StringIO  # python 3
+
+# isort:imports-thirdparty
+from jinja2 import Template
+import mock
 import supervisor.events
 from supervisor.options import (EventListenerConfig, EventListenerPoolConfig, ProcessConfig,
                                 ProcessGroupConfig)
@@ -14,25 +23,19 @@ from supervisor.supervisord import Supervisor
 from supervisor.tests.base import DummyOptions, DummyProcess
 from supervisor.xmlrpc import RPCError
 
-try:
-    from xmlrpclib import Fault as XmlrpcFault
-except ImportError:
-    from xmlrpc.client import Fault as XmlrpcFault
-
-try:
-    from unittest import mock
-except ImportError:
-    import mock
-
 # isort:imports-localfolder
-from . import DependentStartup, StringIO, cleanup_tmp_dir, helpers, test_tmp_dir, utils
+from . import cleanup_tmp_dir, DependentStartup, helpers, log_utils, test_tmp_dir, utils, xmlrpclib
 from .utils import colored, cprint
 
 
-logger = logging.getLogger(utils.plugin_tests_logger_name)
+log = logging.getLogger(log_utils.plugin_tests_logger_name)
 
 
 class UnitTestException(Exception):
+    pass
+
+
+class UnitTestNoMoreEventsException(UnitTestException):
     pass
 
 
@@ -57,7 +60,7 @@ supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 serverurl=unix://{{ tmp_dir }}/supervisor.sock ; use a unix:// URL  for a unix socket
 
 [eventlistener:%(plugin_name)s]
-command={{ supervisord_dependent_startup }} -c /tmp/tmp_home/etc/supervisord.conf
+command={{ supervisord_dependent_startup }} -c {{ base_dir }}/etc/supervisord.conf
 stderr_logfile={{ dependent_startup_log_dir }}/%%(program_name)s-err.log
 autostart=true
 events=PROCESS_STATE
@@ -69,31 +72,12 @@ files = {{ etc_dir }}/supervisord.d/*.ini
 
 service_conf_template = """[program:{{ name }}]
 command={{ command }}
-redirect_stderr=true
 {%- if stdout_logfile %}
 stdout_logfile={{ dependent_startup_log_dir }}/%(program_name)s.log
 {%- endif %}
-{%- if priority %}
-priority={{ priority }}
-{%- endif %}
-{%- if autostart is defined %}
-autostart={{ autostart }}
-{%- endif %}
-{%- if autorestart is defined %}
-autorestart={{ autorestart }}
-{%- endif %}
-{%- if startsecs is defined %}
-startsecs={{ startsecs }}
-{%- endif %}
-{%- if dependent_startup is defined %}
-dependent_startup={{ dependent_startup }}
-{%- endif %}
-{%- if dependent_startup_wait_for is defined %}
-dependent_startup_wait_for={{ dependent_startup_wait_for }}
-{%- endif %}
-{%- if dependent_startup_inherit_priority is defined %}
-dependent_startup_inherit_priority={{ dependent_startup_inherit_priority }}
-{%- endif %}
+{%- for name, value in options.items() %}
+{{ name }}={{ value }}
+{%- endfor %}
 
 """
 
@@ -106,13 +90,9 @@ class DependentStartupTester(DependentStartup):
         super(DependentStartupTester, self).__init__(args, config_file, **kwargs)
         self.batchmsgs = []
 
-    def get_process_state_change_msg(self, headers, payload):
-        return repr(payload)
-
     def handle_event(self, headers, payload):
-        msg = self.get_process_state_change_msg(headers, payload)
-        self.batchmsgs.append(msg)
-        super(DependentStartupTester, self).handle_event(headers, payload)
+        self.batchmsgs.append(repr(payload))
+        return super(DependentStartupTester, self).handle_event(headers, payload)
 
     def monitor_print_batchmsgs(self):
         for i, msg in enumerate(self.monitor.batchmsgs):
@@ -149,17 +129,21 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         utils.mkdir(self.log_dir)
 
         self.supervisor_conf = os.path.join(self.etc, 'supervisord.conf')
-        logger.info("Using supervisor base dir: %s", self.supervisor_base)
+        log.info("Using supervisor base dir: %s", self.supervisor_base)
 
-        self.base_args = {'etc_dir': self.etc,
-                          'supervisord_dependent_startup': 'supervisord-dependent-startup',
-                          'dependent_startup_log_dir': self.log_dir,
-                          'tmp_dir': self.tmp,
-                          'dependent_startup': 'true',
-                          }
+        self.config_base_args = {
+            'base_dir': self.supervisor_base,
+            'etc_dir': self.etc,
+            'supervisord_dependent_startup': 'supervisord-dependent-startup',
+            'dependent_startup_log_dir': self.log_dir,
+            'tmp_dir': self.tmp,
+        }
+
+        self.config_process_base_args = dict(dependent_startup='true', redirect_stderr='true')
         self.processes = {}
-        self.process_group_configs = []
+        self.process_group_configs = {}
         self.processes_started = []
+        self.processes_failed = []
         self.testProcessClass = DummyProcess
         self.supervisord = None
         self.mock_args = mock.Mock(error_action='skip')
@@ -177,37 +161,60 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         obj = DependentStartupTester(args, config_file, **kwargs)
         return obj
 
-    def write_config(self, output_file, template, args):
-        from jinja2 import Template
-        tmpl = Template(template)
+    def write_config(self, output_file, content):
+        utils.write_file(output_file, content)
+
+    def write_supervisord_config(self, write=True):
+        args = dict(self.config_base_args)
+        tmpl = Template(supervisord_conf_template)
         rendered = tmpl.render(args)
-        utils.write_file(output_file, rendered)
+        if write:
+            self.write_config(self.supervisor_conf, rendered)
 
-    def write_supervisord_config(self):
-        args = dict(self.base_args)
-        self.write_config(self.supervisor_conf, supervisord_conf_template, args)
+    def add_service_file(self, name, cmd="/bin/sleep 100", write=True, **extra_args):
+        valid_options = ['autorestart', 'autostart', 'numprocs', 'process_name',
+                         'priority', 'redirect_stderr', 'startsecs',
+                         # Plugin options
+                         'dependent_startup',
+                         'dependent_startup_wait_for',
+                         'dependent_startup_inherit_priority']
+        unknown_options = set(extra_args.keys()) - set(valid_options)
+        if unknown_options:
+            raise UnitTestException("Found unexpected service config options: '%s'" % (unknown_options))
 
-    def add_service_file(self, name, cmd="/bin/sleep 100", **extra_args):
-        args = dict(self.base_args)
-        args['name'] = name
-        args['command'] = cmd
+        options = dict(self.config_process_base_args)
+        service_args = {'name': name,
+                        'command': cmd,
+                        'dependent_startup_log_dir': self.config_base_args['dependent_startup_log_dir'],
+                        'stdout_logfile': True,
+                        'options': options}
 
         if extra_args:
-            args.update(extra_args)
+            options.update(extra_args)
 
-        for a in args:
-            if type(args[a]) is bool:
-                args[a] = str(args[a]).lower()
+        # If set to None in extra_args, delete
+        for attr in self.config_process_base_args:
+            if options[attr] is None:
+                del options[attr]
 
-        self.service_conf = os.path.join(self.supervisord_d, "%s.ini" % name)
-        self.write_config(self.service_conf, service_conf_template, args)
-        return self.service_conf
+        for a in options:
+            if type(options[a]) is bool:
+                options[a] = str(options[a]).lower()
 
-    def add_process(self, name, pconfig, **args):
+        service_conf = os.path.join(self.supervisord_d, "%s.ini" % name)
+        tmpl = Template(service_conf_template)
+        rendered = tmpl.render(service_args)
+        if write:
+            self.write_config(service_conf, rendered)
+        return service_conf, rendered
+
+    def add_process(self, name, pconfig, groupname, **args):
         state = args.get('state', ProcessStates.STOPPED)
+
         process = self.testProcessClass(pconfig, state=state)
         process.laststart = 0
         process.laststop = 0
+        process.groupname = groupname
 
         if 'pid' in args:
             if args['pid'] is True:
@@ -220,12 +227,27 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         self.processes[name] = process
         return process
 
-    def add_test_service(self, name, options, cmd="/bin/sleep 100", autostart=False, **args):
-        self.add_service_file(name, cmd, autostart=autostart, **args)
-        pconfig = self.make_pconfig(name, cmd, options, uid='new', autostart=autostart, **args)
-        pgroup_config = self.make_gconfig(name, [pconfig], options)
-        self.process_group_configs.append(pgroup_config)
-        self.add_process(name, pconfig, **args)
+    def add_test_service(self, name, options, cmd="/bin/sleep 100", group=None, autostart=False, pid=None, **args):
+        service_conf, rendered = self.add_service_file(name, cmd, autostart=autostart, **args)
+
+        if group is None:
+            group = name
+
+        proc_count = args.get('numprocs', 1)
+        process_name = args.get('process_name', name)
+
+        common_expansions = {'program_name': name, 'group_name': group}
+
+        def expand(fmt, **args):
+            args.update(common_expansions)
+            return fmt % args
+
+        for i in range(proc_count):
+            proc_name = expand(process_name, process_num=i)
+            pconfig = self.make_pconfig(proc_name, cmd, options, uid='new', autostart=autostart, **args)
+            self.add_process(proc_name, pconfig, group, pid=pid, group=group, **args)
+
+        return service_conf, rendered
 
     def make_econfig(self, *pool_event_names):
         """
@@ -253,7 +275,7 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
             'stderr_logfile_backups': 0, 'stderr_logfile_maxbytes': 0,
             'stderr_syslog': False,
             'redirect_stderr': False,
-            'stopsignal': None, 'stopwaitsecs': 10,
+            'stopsignal': signal.SIGTERM, 'stopwaitsecs': 10,
             'stopasgroup': False,
             'killasgroup': False,
             'exitcodes': (0, 2), 'environment': None, 'serverurl': None,
@@ -285,7 +307,7 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
             'stderr_logfile_backups': 0, 'stderr_logfile_maxbytes': 0,
             'stderr_syslog': False,
             'redirect_stderr': False,
-            'stopsignal': None, 'stopwaitsecs': 10,
+            'stopsignal': signal.SIGTERM, 'stopwaitsecs': 10,
             'stopasgroup': False,
             'killasgroup': False,
             'exitcodes': (0, 2), 'environment': None, 'serverurl': None,
@@ -311,6 +333,8 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
         exclude = ['name', 'statename', 'state', 'pid']
         for p in procs:
             rest = {k: p[k] for k in p if k not in exclude}
+            if p['pid'] is None:
+                p['pid'] = str(p['pid'])
             print("Proc({name:15}): state({state:2}): {statename:10} pid: {pid:4} {rest}".format(rest=rest, **p))
 
     def getProcessStateDescription(self, process=None, state=None):  # noqa: N802 (lowercase)
@@ -330,10 +354,10 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
                 continue
             found += 1
 
-        if count is None or found == count:
+        if (count is None and found) or found == count:
             return
+        log.error("Captured log statements (%d):\n%s", len(capture), capture)
 
-        logger.error("Captured log statements:\n%s", capture)
         if count and found != count:
             msg = "Log message '%s' occured %d times. Expected %d" % (str(expected), found, count)
         else:
@@ -343,7 +367,7 @@ class DependentStartupSupervisorTestsBase(unittest.TestCase):
     def assertStateProc(self, name, state):  # noqa: N802 (lowercase)
         proc_info = self.rpc.getProcessInfo(name)
         self.assertEqual(proc_info['statename'], state,
-                         "Proc %s expected state %s != %s" % (name, state, proc_info['statename']))
+                         "Proc %s expected state '%s', but found '%s'" % (name, state, proc_info['statename']))
 
     def assertStateProcs(self, proc_states):  # noqa: N802 (lowercase)
         for name, state in proc_states:
@@ -382,7 +406,7 @@ class StdinManualEventsWrapper(object):
 
     def readline(self):
         if self.index >= len(self.events):
-            raise UnitTestException("No more events")
+            raise UnitTestNoMoreEventsException("No more events")
         process_line = self.get_process_event_line(self.index)
         attrs = dict(self.events[self.index])
         attrs['len'] = len(process_line)
@@ -413,7 +437,7 @@ class StdinIOStringWrapper(object):
 
     def readline(self):
         if self._buffer_len() == self.buffer.tell():
-            raise UnitTestException("No more events")
+            raise UnitTestNoMoreEventsException("No more events")
 
         return self.buffer.readline()
 
@@ -421,7 +445,7 @@ class StdinIOStringWrapper(object):
         return self.buffer.read(n)
 
     def write(self, buf):
-        logger.debug(colored("StdinIOStringWrapper.write() EVENT: '%s'" % buf, 'red'))
+        log.debug(colored("StdinIOStringWrapper.write() EVENT: '%s'" % buf, 'red'))
         pos = self.buffer.tell()
         self.buffer.write(buf)
         self.buffer.seek(pos)
@@ -449,12 +473,39 @@ class DependentStartupTestsBase(MockRPCInterfaceTestsBase):
         if mock_get_rpc_interface is None:
             mock_get_rpc_interface = self.mock_get_rpc_interface
         self.supervisord = Supervisor(self.options)
-        self.supervisord.options.process_group_configs = self.process_group_configs
-        self.rpc = self.rpcinterface_class(self.supervisord)
+        self.rpc = self.rpcinterface_class(self, self.supervisord)
 
-        for p in self.processes:
-            self.rpc.addProcessGroup(p)
-            self.rpc.supervisord.process_groups[p].processes = {p: self.processes[p]}
+        procs_by_group = {}
+        # Create process groups for the processes.
+        # Handle processes that share the same group
+        for pname, process in self.processes.items():
+            groupname = process.groupname
+
+            if isinstance(process.config, EventListenerConfig):
+                continue
+
+            if groupname not in procs_by_group:
+                procs_by_group[groupname] = []
+            procs_by_group[groupname].append(process.config)
+
+        for gname, p_configs in procs_by_group.items():
+            options = p_configs[0].options
+            pgroup_config = self.make_gconfig(gname, p_configs, options)
+            self.process_group_configs[gname] = pgroup_config
+
+        # Must set the config here before calling addProcessGroup
+        self.supervisord.options.process_group_configs = self.process_group_configs.values()
+
+        for pname, process in self.processes.items():
+            groupname = process.groupname
+
+            if groupname not in self.supervisord.process_groups:
+                self.rpc.addProcessGroup(groupname)
+
+            # Set the process group on the Subprocess
+            process.group = self.supervisord.process_groups[groupname]
+            # Add the process to the process groups processes dict
+            self.rpc.supervisord.process_groups[groupname].processes[pname] = process
 
         # When calling supervisor.childutils.getRPCInterface, return itself
         mock_get_rpc_interface.return_value = mock_get_rpc_interface
@@ -464,13 +515,25 @@ class DependentStartupTestsBase(MockRPCInterfaceTestsBase):
     def monitor_run_and_listen_action(self, count):
         pass
 
-    def monitor_run_and_listen_until_no_more_events(self):
-        self.monitor.run()
+    def monitor_listen_on_events(self, event_procs=None):
+        count = 0
+        for l in self.monitor._listen():
+            count += 1
+            self.monitor_run_and_listen_action(count)
+            if event_procs:
+                processname = event_procs.pop(0)
+                if processname != l['processname']:
+                    raise UnitTestException("Processed event from unexpected process: '%s' != '%s'" %
+                                            (processname, l['processname']))
+                else:
+                    if not event_procs:
+                        return
+
+    def monitor_run_and_listen_until_no_more_events(self, run=True):
+        if run:
+            self.monitor.run()
         try:
-            count = 0
-            for l in self.monitor._listen():
-                count += 1
-                self.monitor_run_and_listen_action(count)
+            self.monitor_listen_on_events()
         except UnitTestException:
             self.assertFalse(self.monitor.startup_done)
         else:
@@ -479,31 +542,55 @@ class DependentStartupTestsBase(MockRPCInterfaceTestsBase):
 
 class DefaultTestRPCInterface(SupervisorNamespaceRPCInterface):
 
+    def __init__(self, test_instance, supervisord):
+        self.test_instance = test_instance
+        SupervisorNamespaceRPCInterface.__init__(self, supervisord)
+
     def startProcess(self, name, wait=True):  # noqa: N802 (lowercase)
         """
         SupervisorNamespaceRPCInterface raises, RPCError, but we need to catch
-        type xmlrpclib.Fault in the plugin, so translate RPCError to xmlrpclib.Fault.
+        type Xmlrpclib.Fault in the plugin, so we translate RPCError to Xmlrpclib.Fault.
         """
         try:
-            SupervisorNamespaceRPCInterface.startProcess(self, name, wait=wait)
+            return SupervisorNamespaceRPCInterface.startProcess(self, name, wait=wait)
         except RPCError as err:
-            raise XmlrpcFault(err.code, err.text)
+            raise xmlrpclib.Fault(err.code, err.text)
+
+    def startProcessGroup(self, name, wait=True):  # noqa: N802 (lowercase)
+        """
+        SupervisorNamespaceRPCInterface raises, RPCError, but we need to catch
+        type Xmlrpclib.Fault in the plugin, so translate RPCError to Xmlrpclib.Fault.
+        """
+        try:
+            callback = SupervisorNamespaceRPCInterface.startProcessGroup(self, name, wait=wait)
+            return callback()
+        except RPCError as err:
+            raise xmlrpclib.Fault(err.code, err.text)
 
 
 class DependentStartupWithoutEventListenerTestsBase(DependentStartupTestsBase):
 
     def setUp(self):
         super(DependentStartupWithoutEventListenerTestsBase, self).setUp()
-        test_instance = self
 
         class TestRPCInterface(DefaultTestRPCInterface):
 
             def startProcess(self, name, wait=True):  # noqa: N802 (lowercase)
                 # cprint("startProcess(%s)" % (name), 'yellow')
-                test_instance.add_event(name, 'STOPPED', 'PROCESS_STATE_STARTING')
-                test_instance.add_event(name, 'STARTING', 'PROCESS_STATE_RUNNING')
-                DefaultTestRPCInterface.startProcess(self, name, wait=wait)
-                test_instance.processes_started.append(name)
+                proc_name = name
+
+                # If it's a process group with multiple processes (numproc > 1), the name
+                # if on the form service:service_<proc num>, e.g. slurmd:slurmd_00
+                # The processes dict contains the process name without the group prefix
+                # so remove that here
+                if proc_name not in self.test_instance.processes:
+                    proc_name = proc_name.split(':')[1]
+
+                self.test_instance.add_event(proc_name, 'STOPPED', 'PROCESS_STATE_STARTING')
+                self.test_instance.add_event(proc_name, 'STARTING', 'PROCESS_STATE_RUNNING')
+                ret = DefaultTestRPCInterface.startProcess(self, name, wait=wait)
+                self.test_instance.processes_started.append(name)
+                return ret
 
         self.rpcinterface_class = TestRPCInterface
         self.stdin_wrapper = StdinManualEventsWrapper()
@@ -516,6 +603,7 @@ class DependentStartupWithoutEventListenerTestsBase(DependentStartupTestsBase):
         event = {'from_state': from_state, 'eventname': eventname, 'processname': name,
                  'groupname': name, 'pid': pid}
 
+        log.info("add_event(name: %s): %s", name, event)
         self.stdin_wrapper.add_event(event)
 
     def setup_eventlistener(self, mock_get_rpc_interface=None, **kwargs):
@@ -524,11 +612,11 @@ class DependentStartupWithoutEventListenerTestsBase(DependentStartupTestsBase):
         self.monitor = self.get_dependent_startup_mock(stdin=self.stdin_wrapper,
                                                        rpcinterface=mock_get_rpc_interface,
                                                        **kwargs)
-
-    def monitor_run_and_listen_until_no_more_events(self):
-        # We need to add an initial event to trigger the plugin to start handling the services
         self.add_event(dependent_startup_service_name, 'STOPPED', 'PROCESS_STATE_STARTING')
         self.add_event(dependent_startup_service_name, 'STARTING', 'PROCESS_STATE_RUNNING')
+
+    def monitor_run_and_listen_until_no_more_events(self, run=True):
+        # We need to add an initial event to trigger the plugin to start handling the services
         super(DependentStartupWithoutEventListenerTestsBase, self).monitor_run_and_listen_until_no_more_events()
 
 
@@ -546,7 +634,7 @@ class WithEventListenerProcessTestsBase(DependentStartupTestsBase):
                                                        stdout=self.stdout,
                                                        rpcinterface=mock_get_rpc_interface, **kwargs)
 
-    def monitor_run_and_listen_until_no_more_events(self):
+    def monitor_run_and_listen_until_no_more_events(self, run=True):
         # We need to add an initial event to trigger the plugin to start handling the services
         self.processes[dependent_startup_service_name].change_state(ProcessStates.STARTING)
         self.processes[dependent_startup_service_name].transition()

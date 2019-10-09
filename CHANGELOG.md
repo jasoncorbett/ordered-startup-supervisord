@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.4.0) - _2019-10-09_
+[Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.3.2...v1.4.0)
+
+### Added
+- Support for managing services with numprocs > 1 which are started as a process group
+- Support for services that are parts of a group section
+
+
 ## [1.3.2](https://github.com/bendikro/supervisord-dependent-startup/releases/tag/v1.3.2) - _2019-05-23_
 [Commit history](https://github.com/bendikro/supervisord-dependent-startup/compare/v1.3.1...v1.3.2)
 

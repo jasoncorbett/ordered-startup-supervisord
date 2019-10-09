@@ -3,8 +3,9 @@ from __future__ import print_function
 import collections
 import logging
 
-from . import Service, ServiceOptions, ServicesHandler, common
-from .utils import cprint, plugin_logger_name, plugin_tests_logger_name  # noqa: F401
+from . import common, Service, ServiceOptions, ServicesHandler
+from .log_utils import plugin_logger_name, plugin_tests_logger_name  # noqa: F401
+from .utils import cprint  # noqa: F401
 
 logger = logging.getLogger(plugin_tests_logger_name)
 
@@ -26,7 +27,7 @@ class SortOrderTestsBase(common.DependentStartupSupervisorTestsBase):
         for name in services:
             p = Service(self.handler)
             p.name = name
-            p.options = ServiceOptions()
+            p.options = ServiceOptions(name, name)
             p.options.opts['dependent_startup'] = True
             p.options.opts['autostart'] = False
             self.services[name] = p
